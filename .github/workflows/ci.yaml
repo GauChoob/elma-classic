@@ -110,7 +110,7 @@ jobs:
         if: matrix.emscripten
         run: |
           source emsdk/emsdk_env.sh
-          meson setup build -Dbuildtype=release
+          meson setup build -Dbuildtype=release --cross-file=emscripten.ini
 
       - name: Configure
         if: runner.os == 'windows' && matrix.emscripten == false
