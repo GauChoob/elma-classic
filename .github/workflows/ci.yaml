@@ -79,7 +79,7 @@ jobs:
         run: python -m pip install meson==1.10.0 ninja
 
       - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux' && !matrix.emscripten
+        if: runner.os == 'Linux' && matrix.emscripten == false
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1-mesa-dev
@@ -113,18 +113,18 @@ jobs:
           meson setup build -Dbuildtype=release
 
       - name: Configure
-        if: runner.os == 'windows' && !matrix.emscripten
+        if: runner.os == 'windows' && matrix.emscripten == false
         run: meson setup build -Dbuildtype=release --vsenv
 
       - name: Configure
-        if: runner.os != 'windows' && !matrix.emscripten
+        if: runner.os != 'windows' && matrix.emscripten == false
         run: meson setup build -Dbuildtype=release
 
       - name: Build
         run: meson compile -C build
 
       - name: Upload build artifacts
-        if: !matrix.emscripten
+        if: matrix.emscripten == false
         uses: actions/upload-artifact@v4
         with:
           name: elma-${{ runner.os }}-${{ matrix.arch || 'default' }}
