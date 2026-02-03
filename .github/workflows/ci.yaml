@@ -149,8 +149,6 @@ jobs:
           cd emsdk
           ./emsdk.bat install latest
           ./emsdk.bat activate latest
-          echo "./emsdk/upstream/emscripten/" >> $GITHUB_PATH
-          echo $GITHUB_PATH
 
       - name: Emscripten
         if: runner.os != 'windows' && matrix.emscripten
@@ -159,28 +157,32 @@ jobs:
           cd emsdk
           ./emsdk install latest
           ./emsdk activate latest
-          echo "./emsdk/upstream/emscripten/" >> $GITHUB_PATH
-          echo $GITHUB_PATH
 
       - name: Configure
         if: runner.os == 'windows' && !matrix.emscripten
-        run: meson setup build -Dbuildtype=release --vsenv
+        run: |
+          meson setup build -Dbuildtype=release --vsenv
+          meson compile -C build
 
       - name: Configure
         if: runner.os != 'windows' && !matrix.emscripten
-        run: meson setup build -Dbuildtype=release
+        run: |
+          meson setup build -Dbuildtype=release
+          meson compile -C build
 
       - name: Configure
         if: runner.os == 'windows' && matrix.emscripten
         run: |
-          echo $GITHUB_PATH
+          ./emsdk/emsdk_env.bat
           meson setup build -Dbuildtype=release --cross-file emscripten-win.ini
+          meson compile -C build
 
       - name: Configure
         if: runner.os != 'windows' && matrix.emscripten
         run: |
-          echo $GITHUB_PATH
+          source ./emsdk/emsdk_env.sh
           meson setup build -Dbuildtype=release --cross-file emscripten-unix.ini
+          meson compile -C build
 
       - name: Build
         run: meson compile -C build
