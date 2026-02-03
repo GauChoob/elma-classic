@@ -172,8 +172,9 @@ jobs:
 
       - name: Configure
         if: runner.os == 'windows' && matrix.emscripten
+        shell: cmd
         run: |
-          ./emsdk/emsdk_env.bat
+          call ./emsdk/emsdk_env.bat
           meson setup build -Dbuildtype=release --cross-file emscripten-win.ini
           meson compile -C build
 
