@@ -172,11 +172,15 @@ jobs:
 
       - name: Configure
         if: runner.os == 'windows' && matrix.emscripten
-        run: meson setup build -Dbuildtype=release --cross-file emscripten-win.ini
+        run: |
+          echo $GITHUB_PATH
+          meson setup build -Dbuildtype=release --cross-file emscripten-win.ini
 
       - name: Configure
         if: runner.os != 'windows' && matrix.emscripten
-        run: meson setup build -Dbuildtype=release --cross-file emscripten-unix.ini
+        run: |
+          echo $GITHUB_PATH
+          meson setup build -Dbuildtype=release --cross-file emscripten-unix.ini
 
       - name: Build
         run: meson compile -C build
