@@ -147,9 +147,9 @@ jobs:
         run: |
           git clone https://github.com/emscripten-core/emsdk.git
           cd emsdk
-          emsdk.bat install latest
-          emsdk.bat activate latest
-          "./emsdk/upstream/emscripten/" >> $GITHUB_PATH
+          ./emsdk.bat install latest
+          ./emsdk.bat activate latest
+          echo "./emsdk/upstream/emscripten/" >> $GITHUB_PATH
           echo $GITHUB_PATH
 
       - name: Emscripten
@@ -159,7 +159,7 @@ jobs:
           cd emsdk
           ./emsdk install latest
           ./emsdk activate latest
-          "./emsdk/upstream/emscripten/" >> $GITHUB_PATH
+          echo "./emsdk/upstream/emscripten/" >> $GITHUB_PATH
           echo $GITHUB_PATH
 
       - name: Configure
