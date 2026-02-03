@@ -146,17 +146,21 @@ jobs:
         if: runner.os == 'windows' && matrix.emscripten
         run: |
           git clone https://github.com/emscripten-core/emsdk.git
-          echo cd emsdk
-          echo emsdk.bat install latest
-          echo emsdk.bat activate latest
+          cd emsdk
+          emsdk.bat install latest
+          emsdk.bat activate latest
+          "./emsdk/upstream/emscripten/" >> $GITHUB_PATH
+          echo $GITHUB_PATH
 
       - name: Emscripten
         if: runner.os != 'windows' && matrix.emscripten
         run: |
           git clone https://github.com/emscripten-core/emsdk.git
-          echo cd emsdk
-          echo ./emsdk install latest
-          echo ./emsdk activate latest
+          cd emsdk
+          ./emsdk install latest
+          ./emsdk activate latest
+          "./emsdk/upstream/emscripten/" >> $GITHUB_PATH
+          echo $GITHUB_PATH
 
       - name: Configure
         if: runner.os == 'windows' && !matrix.emscripten
