@@ -36,16 +36,7 @@ void invalidate_lgr_cache() {
     CurrentLgrName[0] = '\0';
 }
 
-void lgrfile::load_lgr_file(char* lgr_name) {
-    if (strlen(lgr_name) > MAX_FILENAME_LEN) {
-        internal_error("load_lgr_file strlen( lgr_name ) > MAX_FILENAME_LEN!");
-    }
-    // This lgr is already loaded, so skip
-    if (strcmpi(lgr_name, CurrentLgrName) == 0) {
-        return;
-    }
-    strlwr(lgr_name);
-
+static bool try_access_lgr(const char* lgr_name) {
     char path[30];
     sprintf(path, "lgr/%s.lgr", lgr_name);
     if (access(path, 0) != 0) {
@@ -74,7 +65,23 @@ void lgrfile::load_lgr_file(char* lgr_name) {
         }
         blit8(BufferMain, BufferBall);
         bltfront(BufferMain);
+        return false;
+    }
 
+    return true;
+}
+
+void lgrfile::load_lgr_file(char* lgr_name) {
+    if (strlen(lgr_name) > MAX_FILENAME_LEN) {
+        internal_error("load_lgr_file strlen( lgr_name ) > MAX_FILENAME_LEN!");
+    }
+    // This lgr is already loaded, so skip
+    if (strcmpi(lgr_name, CurrentLgrName) == 0) {
+        return;
+    }
+    strlwr(lgr_name);
+
+    if (!try_access_lgr(lgr_name)) {
         // Modify our input lgr (i.e. our class level) to default and then try and load it
         strcpy(lgr_name, "default");
         Valtozott = 1;
@@ -82,6 +89,7 @@ void lgrfile::load_lgr_file(char* lgr_name) {
             return;
         }
 
+        char path[30];
         strcpy(path, "lgr/default.lgr");
         Ptop->lgr_not_found = true;
         if (access(path, 0) != 0) {
