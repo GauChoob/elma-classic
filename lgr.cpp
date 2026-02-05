@@ -36,13 +36,17 @@ void invalidate_lgr_cache() {
     CurrentLgrName[0] = '\0';
 }
 
-static bool try_access_lgr(const char* lgr_name) {
+static bool try_access_lgr(const char* lgr_name, const char* backup_lgr) {
+    // This lgr is already loaded, so skip
+    if (strcmpi(lgr_name, CurrentLgrName) == 0) {
+        return true;
+    }
+
     char path[30];
     sprintf(path, "lgr/%s.lgr", lgr_name);
     if (access(path, 0) != 0) {
-        // LGR not found
-        if (!Ptop) {
-            internal_error("load_lgr_file !Ptop!");
+        if (!backup_lgr) {
+            return false;
         }
 
         // Display warning
@@ -55,11 +59,13 @@ static bool try_access_lgr(const char* lgr_name) {
         if (!InEditor) {
             Pal_editor->set();
         }
-        dialog(
-            "LGR file not found!",
-            "The level file uses the pictures that are stored in this LGR file:", filename,
-            "This file doesn't exist in the LGR directory, so the default.lgr file will be loaded.",
-            "This level file will look now different from that it was designed to look.");
+        char backup_text[100];
+        sprintf(backup_text, "This file doesn't exist in the LGR directory, so %s will be loaded.",
+                backup_lgr);
+        dialog("LGR file not found!",
+               "The level file uses the pictures that are stored in this LGR file:", filename,
+               backup_text,
+               "This level file will look now different from that it was designed to look.");
         if (!InEditor) {
             MenuPalette->set();
         }
@@ -71,71 +77,65 @@ static bool try_access_lgr(const char* lgr_name) {
     return true;
 }
 
-void lgrfile::load_lgr_file(char* lgr_name) {
+void lgrfile::load_lgr_file(char* lgr_name) { // Make this const
     if (strlen(lgr_name) > MAX_FILENAME_LEN) {
         internal_error("load_lgr_file strlen( lgr_name ) > MAX_FILENAME_LEN!");
     }
 
-    char lgr_load_name[MAX_FILENAME_LEN + 1];
+    char lgr_load_name[MAX_FILENAME_LEN + 1] = {};
     strcpy(lgr_load_name, lgr_name);
+    strlwr(lgr_load_name);
 
     // There are 3 possible LGRs this function will try load in order:
     //   - `lgr_name` passed to the function.
     //   - The LGR name from `eol_settings` if `lgr_name` is "default".
     //   - If `eol_settings::default_lgr_name()` wasn't found, try "default".
 
-    // Use the default override.
-    bool default_override = strcmpi(lgr_load_name, "default") == 0;
-    if (default_override) {
-        strncpy(lgr_load_name, EolSettings->default_lgr_name().c_str(), MAX_FILENAME_LEN);
-    }
-
-    // This lgr is already loaded, so skip
-    if (strcmpi(lgr_load_name, CurrentLgrName) == 0) {
-        return;
-    }
-    strlwr(lgr_load_name);
-
-    bool lgr_found = try_access_lgr(lgr_load_name);
-    if (!lgr_found) {
-        if (default_override) {
-            // try "default" if the default override failed to load
-            strcpy(lgr_load_name, "default");
-        } else {
-            strcpy(lgr_load_name, EolSettings->default_lgr_name().c_str());
-            // Override the input value
-            strcpy(lgr_name, "default");
-            Valtozott = 1;
-        }
-    }
-
-    // Check if the updated LGR name is already loaded
-    if (strcmpi(lgr_load_name, CurrentLgrName) == 0) {
-        return;
-    }
-
-    if (!lgr_found && !try_access_lgr(lgr_load_name)) {
-        // None of the LGRs loaded, fallback to hardcoded 'default'
-        strcpy(lgr_load_name, "default");
-        // Override the input value
-        strcpy(lgr_name, "default");
-        Valtozott = 1;
-        if (strcmpi(CurrentLgrName, "default") == 0) {
+    // Try to load the lgr_name passed to the function, unless it's default.lgr (we use overrides)
+    if (strcmpi(lgr_load_name, "default") != 0) {
+        if (try_access_lgr(lgr_load_name, "the default lgr file")) {
+            strcpy(CurrentLgrName, lgr_load_name);
+            delete Lgr;
+            Lgr = new lgrfile(CurrentLgrName);
             return;
-        }
-
-        char path[30];
-        strcpy(path, "lgr/default.lgr");
-        Ptop->lgr_not_found = true;
-        if (access(path, 0) != 0) {
-            external_error("Could not open file lgr/default.lgr!");
+        } else {
+            if (!Ptop) {
+                internal_error("load_lgr_file !Ptop!");
+            }
+            Valtozott = 1;
+            strcpy(Ptop->lgr_name, "default");
+            Ptop->lgr_not_found = true;
         }
     }
-    // Actually load the lgr
-    strcpy(CurrentLgrName, lgr_load_name);
 
-    delete Lgr;
-    Lgr = new lgrfile(CurrentLgrName);
+    // Try to load the lgr override, unless it's default.lgr or it matches the level's lgr name
+    bool check_override = strcmpi(lgr_load_name, EolSettings->default_lgr_name().c_str()) != 0 ||
+                          strcmpi("default", EolSettings->default_lgr_name().c_str()) != 0;
+    if (check_override) {
+        if (try_access_lgr(EolSettings->default_lgr_name().c_str(), "default.lgr")) {
+            strcpy(CurrentLgrName, EolSettings->default_lgr_name().c_str());
+            delete Lgr;
+            Lgr = new lgrfile(CurrentLgrName);
+            return;
+        } else {
+            if (!Ptop) {
+                internal_error("load_lgr_file !Ptop!");
+            }
+            Valtozott = 1;
+            strcpy(Ptop->lgr_name, "default");
+            Ptop->lgr_not_found = true;
+        }
+    }
+
+    // Try to load default.lgr
+    if (try_access_lgr("default", nullptr)) {
+        strcpy(CurrentLgrName, "default");
+        delete Lgr;
+        Lgr = new lgrfile(CurrentLgrName);
+        return;
+    }
+
+    external_error("Could not open file lgr/default.lgr!");
 }
 
 static void bike_slice(pic8* bike, affine_pic** ret, bike_box* bbox) {
