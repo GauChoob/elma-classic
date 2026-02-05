@@ -75,14 +75,20 @@ void lgrfile::load_lgr_file(char* lgr_name) {
     if (strlen(lgr_name) > MAX_FILENAME_LEN) {
         internal_error("load_lgr_file strlen( lgr_name ) > MAX_FILENAME_LEN!");
     }
+
+    char lgr_load_name[MAX_FILENAME_LEN + 1];
+    strcpy(lgr_load_name, lgr_name);
+
     // This lgr is already loaded, so skip
-    if (strcmpi(lgr_name, CurrentLgrName) == 0) {
+    if (strcmpi(lgr_load_name, CurrentLgrName) == 0) {
         return;
     }
-    strlwr(lgr_name);
+    strlwr(lgr_load_name);
 
-    if (!try_access_lgr(lgr_name)) {
+    if (!try_access_lgr(lgr_load_name)) {
         // Modify our input lgr (i.e. our class level) to default and then try and load it
+        strcpy(lgr_load_name, "default");
+        // Override the input value
         strcpy(lgr_name, "default");
         Valtozott = 1;
         if (strcmpi(CurrentLgrName, "default") == 0) {
@@ -97,7 +103,7 @@ void lgrfile::load_lgr_file(char* lgr_name) {
         }
     }
     // Actually load the lgr
-    strcpy(CurrentLgrName, lgr_name);
+    strcpy(CurrentLgrName, lgr_load_name);
 
     if (Lgr) {
         delete Lgr;
