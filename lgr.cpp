@@ -79,14 +79,43 @@ void lgrfile::load_lgr_file(char* lgr_name) {
     char lgr_load_name[MAX_FILENAME_LEN + 1];
     strcpy(lgr_load_name, lgr_name);
 
+    // There are 3 possible LGRs this function will try load in order:
+    //   - `lgr_name` passed to the function.
+    //   - The LGR name from `eol_settings` if `lgr_name` is "default".
+    //   - If `eol_settings::default_lgr_name()` wasn't found, try "default".
+
+    // Use the default override.
+    bool default_override = strcmpi(lgr_load_name, "default") == 0;
+    if (default_override) {
+        strncpy(lgr_load_name, EolSettings->default_lgr_name().c_str(), MAX_FILENAME_LEN);
+    }
+
     // This lgr is already loaded, so skip
     if (strcmpi(lgr_load_name, CurrentLgrName) == 0) {
         return;
     }
     strlwr(lgr_load_name);
 
-    if (!try_access_lgr(lgr_load_name)) {
-        // Modify our input lgr (i.e. our class level) to default and then try and load it
+    bool lgr_found = try_access_lgr(lgr_load_name);
+    if (!lgr_found) {
+        if (default_override) {
+            // try "default" if the default override failed to load
+            strcpy(lgr_load_name, "default");
+        } else {
+            strcpy(lgr_load_name, EolSettings->default_lgr_name().c_str());
+            // Override the input value
+            strcpy(lgr_name, "default");
+            Valtozott = 1;
+        }
+    }
+
+    // Check if the updated LGR name is already loaded
+    if (strcmpi(lgr_load_name, CurrentLgrName) == 0) {
+        return;
+    }
+
+    if (!lgr_found && !try_access_lgr(lgr_load_name)) {
+        // None of the LGRs loaded, fallback to hardcoded 'default'
         strcpy(lgr_load_name, "default");
         // Override the input value
         strcpy(lgr_name, "default");
