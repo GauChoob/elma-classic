@@ -134,11 +134,8 @@ void lgrfile::load_lgr_file(char* lgr_name) {
     // Actually load the lgr
     strcpy(CurrentLgrName, lgr_load_name);
 
-    if (Lgr) {
-        delete Lgr;
-    }
+    delete Lgr;
     Lgr = new lgrfile(CurrentLgrName);
-    return;
 }
 
 static void bike_slice(pic8* bike, affine_pic** ret, bike_box* bbox) {
