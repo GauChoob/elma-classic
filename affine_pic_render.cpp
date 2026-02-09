@@ -283,36 +283,34 @@ void draw_affine_pic(pic8* dest, affine_pic* aff, vect2 u, vect2 v, vect2 r) {
     // The else case is the normal case, only differences are noted here.
     if (possibly_out_of_bounds) {
         while (true) {
-            int x1 = (int)(std::max(plane1_left, plane2_left));
-            x1++;
-            int x2 = (int)(std::min(plane1_right, plane2_right));
-            // Extra screen out of bounds check
+            int x1_plane = (int)(std::ceil(std::max(plane1_left, plane2_left)));
+            int x2_plane = (int)(std::floor(std::min(plane1_right, plane2_right)));
+            // Extra x out of bounds check
+            int x1 = std::max(0, x1_plane);
+            int x2 = std::min(Cxsize - 1, x2_plane);
+            // Extra y out of bounds check
             if (x1 <= x2 && y < Cysize) {
-                // Extra screen out of bounds check
-                while (x_left > x1 && x_left > 0) {
+                while (x_left > x1) {
                     x_left--;
                     affine_x -= inverse_i.x;
                     affine_y -= inverse_i.y;
                 }
-                // Extra screen out of bounds check
-                while (x_left < x1 || x_left < 0) {
+                while (x_left < x1) {
                     x_left++;
                     affine_x += inverse_i.x;
                     affine_y += inverse_i.y;
                 }
                 unsigned char* dest_target = dest->get_row(y);
                 dest_target += x_left;
-                // Extra out of bounds check (right screen border)
-                int length = std::min(x2 - x_left + 1, Cxsize - x_left);
-                draw_affine_pic_row(transparency, length, dest_target, aff->pixels, affine_x,
+                draw_affine_pic_row(transparency, x2 - x1 + 1, dest_target, aff->pixels, affine_x,
                                     affine_y, inverse_i.x, inverse_i.y);
             } else {
-                if (x1 > x2 + 1) {
+                if (x1_plane > x2_plane + 1) {
                     return;
                 }
             }
             y--;
-            // Extra screen out of bounds check
+            // Extra y out of bounds check
             if (y < 0) {
                 return;
             }
@@ -326,11 +324,10 @@ void draw_affine_pic(pic8* dest, affine_pic* aff, vect2 u, vect2 v, vect2 r) {
     } else {
         // For each row of the destination
         while (true) {
-            // Get the left render edge, +1 for safety
-            int x1 = (int)(std::max(plane1_left, plane2_left));
-            x1++;
-            // Get the right render edge
-            int x2 = (int)(std::min(plane1_right, plane2_right));
+            // Get the left render edge, rounded up
+            int x1 = (int)(std::ceil(std::max(plane1_left, plane2_left)));
+            // Get the right render edge, rounded down
+            int x2 = (int)(std::floor(std::min(plane1_right, plane2_right)));
             if (x1 <= x2) {
                 // If we are drawing at least 1 pixel, we need to update our source pixel position
                 // by moving by the transformed matrix units

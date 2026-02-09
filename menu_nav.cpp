@@ -141,6 +141,7 @@ void menu_nav::setup(int len, bool two_col) {
 }
 
 bool CtrlAltPressed = false;
+bool F1Pressed = false;
 
 int menu_nav::calculate_visible_entries(int extra_lines_length) {
     int max_visible_entries = (SCREEN_HEIGHT - y_entries) / dy;
@@ -197,7 +198,8 @@ int menu_nav::navigate(text_line* extra_lines, int extra_lines_length, bool rend
                 return -1;
             }
             if (c == KEY_ENTER) {
-                CtrlAltPressed = is_ctrl_alt_down();
+                CtrlAltPressed = is_key_down(DIK_LCONTROL) && is_key_down(DIK_LMENU);
+                F1Pressed = is_key_down(DIK_F1);
                 return selected_index;
             }
             if (c == KEY_UP) {

@@ -10,6 +10,7 @@
 ## Major Bug Fixes
 * It is possible to properly collect more than 200 apples in a single frame
 * Wheel turning the wrong way in replays is fixed (glitch starts at 455 speed instead of 124 speed, where max gas speed is approximately 220)
+* Fix crash related to "too complicated" (too large) mask
 
 ## Minor Features
 * Improve picture loading speed by allocating all needed memory at once instead of allocating in blocks of 64 KB (DOS-era restriction)
@@ -23,6 +24,12 @@
 * message.inf is no longer required to view error messages, and error messages are now all in English
 * turntime can now be configured
 * You can now type more non-letter symbols in game menus, like saving a replay or level named `!cov!`
+* Save play is enabled for internal 55, More Levels
+* Key repeat now works in menu so you can hold arrow down to go down or a to save many a.rec
+* You can now use mouse scroll wheel to navigate the menu
+* Elma now saves State.dat when you change options
+* You can now f1-p in editor (same as f1-enter but in editor)
+* You can now change what LGR to use as the default from inside the options menu
 
 ## Minor Bug Fixes
 * Enforce lowercase LGR filenames to fix loading issues on case-sensitive filesystems
@@ -42,6 +49,7 @@
 * Fix bike flickering at high zoom
 * Fix some minor bike jitters in replay playback when bike or wheel rotates past an angle of 0 degrees (upright position)
 * Fix bike/wheel jitters in replay playback in the first 2 frames of the replay
+* Fixed a bug where a replay named a.rec.rec could not be played by elma
 
 ## Removed Legacy Features
 * It is no longer possible to upgrade from across.res to elma.res
@@ -52,3 +60,4 @@
 * files.inf (files are read from ../files, instead of elma.res) is no longer supported
 * Debug code to generate elma.res/desclist.txt is removed
 * Level files are always unlocked, and you can no longer Save Lock
+* 1997 Action SuperCross debug message removed from Save Play

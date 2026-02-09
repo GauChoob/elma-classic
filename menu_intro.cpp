@@ -31,7 +31,6 @@ void menu_intro() {
 
     merge_states();
     eol_settings::sync_controls_to_state(State);
-    init_shirt();
 
     init_physics_data();
 
@@ -40,7 +39,7 @@ void menu_intro() {
     // Load intro.pcx and hide the version
     Intro = new pic8("intro.pcx");
     Intro->fill_box(0, 410, Intro->get_width(), 450, Intro->gpixel(0, 409));
-    spriteosit(Intro);
+    Intro->add_transparency();
     pic8* static_intro_screen = new pic8(SCREEN_WIDTH, SCREEN_HEIGHT);
     static_intro_screen->fill_box(BLACK_PALETTE_ID);
     blit8(static_intro_screen, Intro, SCREEN_WIDTH / 2 - Intro->get_width() / 2,
@@ -57,6 +56,8 @@ void menu_intro() {
     Pabc1->set_spacing(1);
     Pabc2 = new abc8("kisbetu2.abc"); // "small letter 2"
     Pabc2->set_spacing(1);
+
+    init_renderer();
 
     Rec1 = new recorder;
     Rec2 = new recorder;

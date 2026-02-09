@@ -1,13 +1,14 @@
 #include "menu_external.h"
+#include "menu_nav.h"
 #include "fs_utils.h"
 #include "LEJATSZO.H"
 #include "LOAD.H"
 #include "main.h"
 #include "menu_nav.h"
 #include "menu_pic.h"
+#include "menu_play.h"
 #include "platform_impl.h"
 #include "platform_utils.h"
-#include "PLAY.H"
 #include "state.h"
 #include <cstring>
 #include <algorithm>
@@ -74,17 +75,17 @@ void menu_external_levels() {
         strcpy(State->external_filename, filename);
 
         while (true) {
-            kiirloading();
+            loading_screen();
             if (!floadlevel_p(filename)) {
                 break;
             }
             Rec1->erase(filename);
             Rec2->erase(filename);
-            int time = lejatszo(filename);
+            int time = lejatszo(filename, F1Pressed ? CameraMode::MapViewer : CameraMode::Normal);
             MenuPalette->set();
             char finish_msg[100] = "";
-            idoelintezes(time, finish_msg, 0, filename);
-            if (!afterplay(0, 0, finish_msg, filename)) {
+            update_top_ten(time, finish_msg, 0, filename);
+            if (menu_level(0, 0, finish_msg, filename) == MenuLevel::Esc) {
                 Rec1->erase(filename);
                 Rec2->erase(filename);
                 break;

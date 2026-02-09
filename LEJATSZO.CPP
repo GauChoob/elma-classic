@@ -11,7 +11,9 @@
 #include "object.h"
 #include "physics_init.h"
 #include "platform_impl.h"
+#include "segments.h"
 #include "timer.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <directinput/scancodes.h>
@@ -26,6 +28,29 @@ int Tag = 0;
 int Legkozment = 0;
 
 static int Kajakell;
+
+static void update_freecam(double dt, camera& current_camera) {
+    double speed = 30.0;
+    if (is_key_down(DIK_LSHIFT) || is_key_down(DIK_RSHIFT)) {
+        speed *= 4.0;
+    }
+    double move = speed * dt;
+    if (is_key_down(DIK_UP)) {
+        current_camera.y += move;
+    }
+    if (is_key_down(DIK_DOWN)) {
+        current_camera.y -= move;
+    }
+    if (is_key_down(DIK_LEFT)) {
+        current_camera.x -= move;
+    }
+    if (is_key_down(DIK_RIGHT)) {
+        current_camera.x += move;
+    }
+
+    current_camera.x = std::clamp(current_camera.x, current_camera.min_x, current_camera.max_x);
+    current_camera.y = std::clamp(current_camera.y, current_camera.min_y, current_camera.max_y);
+}
 
 struct viewtimest {
     int viewkinplay, viewkinreplay;
@@ -195,6 +220,7 @@ static void belsoresz(motorst* pmot, player_keys* popciok, valtozok* pvalt, reco
     int objszam;
     while (get_event_buffer(&wavazonosito, &hangero, &objszam)) {
         if (objszam >= 0) {
+            int prev_apple_count = pmot->apple_count;
             int eredmeny = spritefeldolgoz(objszam, &pmot->apple_count, pmot);
             if (eredmeny == 0 || eredmeny == 1) {
                 if (eredmeny == 0) {
@@ -202,6 +228,10 @@ static void belsoresz(motorst* pmot, player_keys* popciok, valtozok* pvalt, reco
                 } else {
                     *pmegvanido = eddig * TimeToCentiseconds;
                 }
+            }
+
+            if (prev_apple_count < pmot->apple_count) {
+                pmot->last_apple_time = eddig * TimeToCentiseconds;
             }
         } else {
             start_wav(wavazonosito, hangero);
@@ -311,7 +341,7 @@ static void kulsoresz(motorst* pmot, player_keys* popciok, valtozok* pvalt, reco
 
 // lejatszo ezt beallitja: 0 -> nem kell kiirni, 1 -> A eloszor, 2 -> B
 // csak akkor A vagy B eloszor, ha mindketten meghaltak, tehat
-// afterplay menu-nek ezt mar feldolgozta elore:
+// menu_level menu-nek ezt mar feldolgozta elore:
 int MeghalteloszorAB = 0;
 
 // Ha sikeres szint, ide teszi be hogy ki ment ki:
@@ -320,7 +350,7 @@ int Aerintetteviragot = 0;
 int Masodikmenet = 0;
 
 // Idot adja vissza szazadmasodpercben:
-long lejatszo(const char* filenev) {
+long lejatszo(const char* filenev, CameraMode cameramode) {
     // internal_error( "Ezegyhosszusor,szetkellvagnibiztosanhibaEzegy hosszu sor, szet kell vagni
     // biztosan!",
     //	"Ez egy masik hosszu sor, szet kell vagni biztosan!" );
@@ -385,8 +415,22 @@ long lejatszo(const char* filenev) {
     resetleptet(Motor1);
     resetleptet(Motor2);
 
+    camera current_camera;
+    current_camera.mode = cameramode;
+    current_camera.x = Motor1->bike.r.x;
+    current_camera.y = Motor1->bike.r.y;
+
+    double level_min_y;
+    double level_max_y;
+    Ptop->get_boundaries(&current_camera.min_x, &level_min_y, &current_camera.max_x, &level_max_y,
+                         false);
+    // convert level y-coordinates to camera y-coordinates
+    current_camera.min_y = -level_max_y;
+    current_camera.max_y = -level_min_y;
+
     initsoundlejatszoban();
-    Mute = false;
+    // Stay muted if no bike is visible.
+    Mute = !(current_camera.mode != CameraMode::MapViewer);
     if (Single) {
         start_motor_sound(true);
     } else {
@@ -431,6 +475,12 @@ long lejatszo(const char* filenev) {
 
             if (eddig + dt > cel) {
                 dt = cel - eddig;
+            }
+
+            if (current_camera.mode == CameraMode::MapViewer) {
+                update_freecam(dt, current_camera);
+                eddig += dt;
+                continue;
             }
 
             if (!meghalt1) {
@@ -537,7 +587,7 @@ long lejatszo(const char* filenev) {
             Lgr->pal->set();
         }
         kirajzol320(eddig, &valt1, &valt2, Viewtime1.viewkinplay, Viewtime1.timekinplay,
-                    Viewtime2.viewkinplay, Viewtime2.timekinplay);
+                    Viewtime2.viewkinplay, Viewtime2.timekinplay, current_camera);
 
         // Egy par kozos toggle:
         // Plusz elintezes:
@@ -665,8 +715,11 @@ static bool replaymag(motorst* pmot, player_keys* popciok, valtozok* pvalt, reco
     int objszam;
     while (prec->recall_event(eddig, &wavindex, &hangero, &objszam)) {
         if (objszam >= 0) {
-            int tmpi = 0;
-            spritefeldolgoz(objszam, &tmpi, pmot);
+            int prev_apple_count = pmot->apple_count;
+            spritefeldolgoz(objszam, &pmot->apple_count, pmot);
+            if (prev_apple_count < pmot->apple_count) {
+                pmot->last_apple_time = eddig * TimeToCentiseconds;
+            }
         } else {
             start_wav(wavindex, hangero);
             if (wavindex == WavEvent::RightVolt) {
@@ -712,6 +765,14 @@ long lejatszo_r(const char* filenev, int showkepmarad) {
     Single = !MultiplayerRec;
     Tag = Rec1->flagtag();
 
+    // Refuse to play zero-length replays (from map-viewer mode)
+    if (Rec1->is_empty()) {
+        return -2;
+    }
+    if (!Single && Rec2->is_empty()) {
+        return -2;
+    }
+
     load_best_time(filenev, Single);
 
     int palmegnincs = 1;
@@ -756,6 +817,9 @@ long lejatszo_r(const char* filenev, int showkepmarad) {
     resetleptet(Motor1);
     resetleptet(Motor2);
 
+    camera current_camera;
+    current_camera.mode = CameraMode::Normal;
+
     initsoundlejatszoban();
     Mute = false;
     if (Single) {
@@ -767,7 +831,7 @@ long lejatszo_r(const char* filenev, int showkepmarad) {
 
     flagtag_reset();
 
-    // Motor1->apple_count = Motor2->apple_count = 0;
+    Motor1->apple_count = Motor2->apple_count = 0;
     long l = 0;
     int jar1 = 1, jar2 = 1;
 
@@ -872,7 +936,7 @@ long lejatszo_r(const char* filenev, int showkepmarad) {
             Lgr->pal->set();
         }
         kirajzol320(eddig, &valt1, &valt2, Viewtime1.viewkinreplay, Viewtime1.timekinreplay,
-                    Viewtime2.viewkinreplay, Viewtime2.timekinreplay);
+                    Viewtime2.viewkinreplay, Viewtime2.timekinreplay, current_camera);
 
         // Egy par kozos toggle:
         // Plusz elintezes:

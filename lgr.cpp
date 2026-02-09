@@ -20,6 +20,8 @@
 #include "sprite.h"
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
+#include <vector>
 
 constexpr int MAGIC_NUMBER = 187565543;
 
@@ -36,66 +38,107 @@ void invalidate_lgr_cache() {
     CurrentLgrName[0] = '\0';
 }
 
-void lgrfile::load_lgr_file(char* lgr_name) {
+static bool try_access_lgr(const char* lgr_name, const char* backup_lgr) {
+    char path[30];
+    sprintf(path, "lgr/%s.lgr", lgr_name);
+    if (std::filesystem::exists(path)) {
+        return true;
+    }
+
+    if (!backup_lgr) {
+        return false;
+    }
+
+    // LGR not found
+    if (!Ptop) {
+        internal_error("load_lgr_file !Ptop!");
+    }
+
+    // Display warning
+    char filename[20];
+    strcpy(filename, lgr_name);
+    strcat(filename, ".lgr");
+    blit8(BufferBall, BufferMain);
+    BufferMain->fill_box(Hatterindex);
+    bltfront(BufferMain);
+    if (!InEditor) {
+        Pal_editor->set();
+    }
+    char backup_text[100];
+    sprintf(backup_text, "This file doesn't exist in the LGR directory, so %s will be loaded.",
+            backup_lgr);
+    dialog("LGR file not found!",
+           "The level file uses the pictures that are stored in this LGR file:", filename,
+           backup_text,
+           "This level file will look now different from that it was designed to look.");
+    if (!InEditor) {
+        MenuPalette->set();
+    }
+    blit8(BufferMain, BufferBall);
+    bltfront(BufferMain);
+    return false;
+}
+
+bool lgrfile::try_load_lgr(const char* name, const char* desc) {
+    if (!try_access_lgr(name, desc)) {
+        return false;
+    }
+
+    if (strcmpi(name, CurrentLgrName) == 0) {
+        return true;
+    }
+
+    strcpy(CurrentLgrName, name);
+    delete Lgr;
+    Lgr = new lgrfile(CurrentLgrName);
+    return true;
+}
+
+void lgrfile::load_lgr_file(const char* lgr_name) {
     if (strlen(lgr_name) > MAX_FILENAME_LEN) {
         internal_error("load_lgr_file strlen( lgr_name ) > MAX_FILENAME_LEN!");
     }
-    // This lgr is already loaded, so skip
-    if (strcmpi(lgr_name, CurrentLgrName) == 0) {
-        return;
-    }
-    strlwr(lgr_name);
 
-    char path[30];
-    sprintf(path, "lgr/%s.lgr", lgr_name);
-    if (access(path, 0) != 0) {
-        // LGR not found
+    char lgr_load_name[MAX_FILENAME_LEN + 1] = {};
+    strcpy(lgr_load_name, lgr_name);
+    strlwr(lgr_load_name);
+
+    // There are 3 possible LGRs this function will try to load in order:
+    //   - `lgr_name`
+    //   - `eol_settings::default_lgr_name()`
+    //   - "default"
+    std::string default_override = EolSettings->default_lgr_name();
+    const bool is_default = strcmp(lgr_load_name, "default") == 0;
+    const bool override_is_same = strcmpi(default_override.c_str(), lgr_load_name) == 0;
+    const bool override_is_default = strcmpi(default_override.c_str(), "default") == 0;
+
+    if (!is_default && !override_is_same) {
+        const char* desc = override_is_default ? "default.lgr" : "the default lgr file";
+
+        if (try_load_lgr(lgr_load_name, desc)) {
+            return;
+        }
+
         if (!Ptop) {
             internal_error("load_lgr_file !Ptop!");
         }
 
-        // Display warning
-        char filename[20];
-        strcpy(filename, lgr_name);
-        strcat(filename, ".lgr");
-        blit8(BufferBall, BufferMain);
-        BufferMain->fill_box(Hatterindex);
-        bltfront(BufferMain);
-        if (!InEditor) {
-            Pal_editor->set();
-        }
-        dialog(
-            "LGR file not found!",
-            "The level file uses the pictures that are stored in this LGR file:", filename,
-            "This file doesn't exist in the LGR directory, so the default.lgr file will be loaded.",
-            "This level file will look now different from that it was designed to look.");
-        if (!InEditor) {
-            MenuPalette->set();
-        }
-        blit8(BufferMain, BufferBall);
-        bltfront(BufferMain);
-
-        // Modify our input lgr (i.e. our class level) to default and then try and load it
-        strcpy(lgr_name, "default");
         Valtozott = 1;
-        if (strcmpi(CurrentLgrName, "default") == 0) {
+        strcpy(Ptop->lgr_name, "default");
+        Ptop->lgr_not_found = true;
+    }
+
+    if (!override_is_default) {
+        if (try_load_lgr(default_override.c_str(), "default.lgr")) {
             return;
         }
-
-        strcpy(path, "lgr/default.lgr");
-        Ptop->lgr_not_found = true;
-        if (access(path, 0) != 0) {
-            external_error("Could not open file lgr/default.lgr!");
-        }
     }
-    // Actually load the lgr
-    strcpy(CurrentLgrName, lgr_name);
 
-    if (Lgr) {
-        delete Lgr;
+    if (try_load_lgr("default", nullptr)) {
+        return;
     }
-    Lgr = new lgrfile(CurrentLgrName);
-    return;
+
+    external_error("Could not open file lgr/default.lgr!");
 }
 
 static void bike_slice(pic8* bike, affine_pic** ret, bike_box* bbox) {
@@ -316,8 +359,67 @@ void lgrfile::add_texture(pic8* pic, piclist* list, int index) {
     texture_count++;
 }
 
-constexpr size_t MASK_MAX_MEMORY = 20000;
-static mask_element MaskBuffer[MASK_MAX_MEMORY];
+static std::vector<mask_element> MaskBuffer;
+
+static void create_mask(mask* dest, pic8* pic, int transparency) {
+    dest->width = pic->get_width();
+    dest->height = pic->get_height();
+
+    // Special compression format type
+    MaskBuffer.resize(0);
+    if (transparency >= 0) {
+        for (int i = 0; i < dest->height; i++) {
+            unsigned char* row = pic->get_row(i);
+            int j = 0;
+            while (j < dest->width) {
+                // Transparent data
+                int skip = consecutive_transparent_pixels(j, dest->width, row,
+                                                          (unsigned char)transparency);
+                if (skip > 0) {
+                    mask_element element;
+                    element.type = MaskEncoding::Transparent;
+                    element.length = skip;
+                    MaskBuffer.push_back(element);
+                }
+                j += skip;
+
+                // Solid data
+                int count =
+                    consecutive_solid_pixels(j, dest->width, row, (unsigned char)transparency);
+                if (count > 0) {
+                    mask_element element;
+                    element.type = MaskEncoding::Solid;
+                    element.length = count;
+                    MaskBuffer.push_back(element);
+                }
+                j += count;
+            }
+            // End of row
+            mask_element element;
+            element.type = MaskEncoding::EndOfLine;
+            element.length = 0;
+            MaskBuffer.push_back(element);
+        }
+    } else {
+        // Solid square special case
+        for (int i = 0; i < dest->height; i++) {
+            mask_element element;
+            element.type = MaskEncoding::Solid;
+            element.length = dest->width;
+            MaskBuffer.push_back(element);
+            element.type = MaskEncoding::EndOfLine;
+            element.length = 0;
+            MaskBuffer.push_back(element);
+        }
+    }
+
+    dest->data = new mask_element[MaskBuffer.size()];
+    if (!dest->data) {
+        internal_error("Memory!");
+    }
+    std::copy(MaskBuffer.begin(), MaskBuffer.end(), dest->data);
+    delete pic;
+}
 
 void lgrfile::add_mask(pic8* pic, piclist* list, int index) {
     if (mask_count >= MAX_MASKS) {
@@ -325,78 +427,11 @@ void lgrfile::add_mask(pic8* pic, piclist* list, int index) {
     }
 
     // Copy properties
-    mask* new_mask = &masks[mask_count];
-    strcpy(new_mask->name, list->name[index]);
-    new_mask->width = pic->get_width();
-    new_mask->height = pic->get_height();
-
-    // Special compression format type
-    int buffer_offset = 0;
+    mask* dest = &masks[mask_count];
+    strcpy(dest->name, list->name[index]);
     int transparency = get_transparency_palette_id(list->transparency[index], pic);
-    if (transparency >= 0) {
-        for (int i = 0; i < new_mask->height; i++) {
-            // Transparent data
-            unsigned char* row = pic->get_row(i);
-            int j = consecutive_transparent_pixels(0, new_mask->width, row,
-                                                   (unsigned char)transparency);
-            if (j > 0) {
-                MaskBuffer[buffer_offset].type = MaskEncoding::Transparent;
-                MaskBuffer[buffer_offset].length = j;
-                buffer_offset++;
-            }
-            while (j <= new_mask->width - 1) {
-                // Solid data
-                int count =
-                    consecutive_solid_pixels(j, new_mask->width, row, (unsigned char)transparency);
-                if (count <= 0) {
-                    internal_error("add_mask count length negative!");
-                }
+    create_mask(dest, pic, transparency);
 
-                MaskBuffer[buffer_offset].type = MaskEncoding::Solid;
-                MaskBuffer[buffer_offset].length = count;
-                buffer_offset++;
-                if (buffer_offset > MASK_MAX_MEMORY - 10) {
-                    external_error("Mask picture is too complicated!:", list->name[index]);
-                }
-
-                j += count;
-
-                // Transparent data
-                count = consecutive_transparent_pixels(j, new_mask->width, row,
-                                                       (unsigned char)transparency);
-                if (count > 0) {
-                    MaskBuffer[buffer_offset].type = MaskEncoding::Transparent;
-                    MaskBuffer[buffer_offset].length = count;
-                    buffer_offset++;
-                }
-                j += count;
-            }
-            // End of row
-            MaskBuffer[buffer_offset].type = MaskEncoding::EndOfLine;
-            MaskBuffer[buffer_offset].length = 0;
-            buffer_offset++;
-        }
-    } else {
-        // Solid square special case
-        for (int i = 0; i < new_mask->height; i++) {
-            MaskBuffer[buffer_offset].type = MaskEncoding::Solid;
-            MaskBuffer[buffer_offset].length = new_mask->width;
-            buffer_offset++;
-            MaskBuffer[buffer_offset].type = MaskEncoding::EndOfLine;
-            MaskBuffer[buffer_offset].length = 0;
-            buffer_offset++;
-        }
-    }
-
-    new_mask->data = new mask_element[buffer_offset];
-    if (!new_mask->data) {
-        internal_error("Memory!");
-    }
-    for (int j = 0; j < buffer_offset; j++) {
-        new_mask->data[j] = MaskBuffer[j];
-    }
-
-    delete pic;
     mask_count++;
 }
 
@@ -510,6 +545,7 @@ lgrfile::lgrfile(const char* lgrname) {
     pic8* q1bike = nullptr;
     pic8* q2bike = nullptr;
     pic8* qcolors = nullptr;
+    MaskBuffer.reserve(20000);
     for (int i = 0; i < pcx_length; i++) {
         char asset_filename[30];
         if (fread(asset_filename, 1, 20, h) != 20) {
@@ -804,6 +840,9 @@ lgrfile::lgrfile(const char* lgrname) {
         delete PictureBuffer;
         PictureBuffer = nullptr;
     }
+
+    MaskBuffer.resize(0);
+    MaskBuffer.shrink_to_fit();
 
     // Editor picture selection initialization
     editor_picture_name[0] = 0;
