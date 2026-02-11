@@ -27,7 +27,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.x"
 
       - name: Install dependencies
         run: python -m pip install meson==1.10.0 ninja
@@ -101,6 +101,10 @@ jobs:
           - os: macos-latest
           - os: macos-15-intel
             arch: x86_64
+          - os: ubuntu-latest
+            emscripten: true
+          - os: windows-latest
+            emscripten: true
 
     steps:
       - name: Checkout repository
@@ -110,24 +114,24 @@ jobs:
         uses: actions/cache@v4
         with:
           path: subprojects/packagecache
-          key: ${{ runner.os }}-${{ matrix.arch || 'default' }}-meson-${{ hashFiles('subprojects/*.wrap') }}
+          key: ${{ runner.os }}-${{ matrix.arch || 'default' }}-${{ matrix.emscripten || 'default'}}-meson-${{ hashFiles('subprojects/*.wrap') }}
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           variant: sccache
-          key: ${{ runner.os }}-${{ matrix.arch || 'default' }}
+          key: ${{ runner.os }}-${{ matrix.arch || 'default' }}-${{ matrix.emscripten || 'default'}}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.x"
 
       - name: Install dependencies
         run: python -m pip install meson==1.10.0 ninja
 
       - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.emscripten == false
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1-mesa-dev
@@ -138,18 +142,41 @@ jobs:
         with:
           vs-version: "[17.1,18.0)"
 
+      - name: Install emsdk
+        if: matrix.emscripten
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git
+          cd emsdk
+          ./emsdk install latest
+          ./emsdk activate latest
+
+      - name: Load emsdk environment
+        if: matrix.emscripten
+        run: |
+          cd emsdk
+          source ./emsdk_env.sh
+          echo "EMSDK=$EMSDK" >> $GITHUB_ENV
+          echo "PATH=$PATH" >> $GITHUB_ENV
+
+      - name: Configure (emscripten)
+        if: matrix.emscripten
+        run: |
+          source emsdk/emsdk_env.sh
+          meson setup build -Dbuildtype=release --cross-file=emscripten.ini
+
       - name: Configure
-        if: runner.os == 'windows'
+        if: runner.os == 'windows' && matrix.emscripten == false
         run: meson setup build -Dbuildtype=release --vsenv
 
       - name: Configure
-        if: runner.os != 'windows'
+        if: runner.os != 'windows' && matrix.emscripten == false
         run: meson setup build -Dbuildtype=release
 
       - name: Build
         run: meson compile -C build
 
       - name: Upload build artifacts
+        if: matrix.emscripten == false
         uses: actions/upload-artifact@v4
         with:
           name: elma-${{ runner.os }}-${{ matrix.arch || 'default' }}
@@ -158,3 +185,14 @@ jobs:
             build/elma.exe
           retention-days: 5
           if-no-files-found: ignore
+
+      - name: Upload emscripten artifacts
+        if: matrix.emscripten
+        uses: actions/upload-artifact@v4
+        with:
+          name: elma-web-${{ runner.os }}
+          path: |
+            build/*.html
+            build/*.js
+            build/*.wasm
+          retention-days: 5
