@@ -1,5 +1,6 @@
 #include "main.h"
 #include "editor/canvas.h"
+#include "eol/api.h"
 #include "eol/eol.h"
 #include "eol/settings.h"
 #include "log.h"
@@ -41,13 +42,35 @@ int main() {
 
     platform_init();
 
+    eol_api::init();
+
     EolClient = new eol();
     EolClient->connect();
+
+    auto err2 = eol_api::lgr_get("real sky");
+    if (err2) {
+        LOG_DEBUG("{}", err2.value());
+    }
+    // TODO: if requestedlgr, currentlgr, or lgroverride is updated, then reset lgr cache
+
+    // auto [info, err] = eol_api::lgr_info();
+    // if (info.is_null()) {
+    //     LOG_DEBUG("Err: {}", err);
+    // } else {
+    //     LOG_DEBUG("Json: {}", info.dump());
+    // }
+
+    // eol_api::update_lgrs();
+
+    quit();
 
     menu_intro();
 }
 
-void quit() { exit(0); }
+void quit() {
+    eol_api::cleanup();
+    exit(0);
+}
 
 bool ErrorGraphicsLoaded = false;
 
