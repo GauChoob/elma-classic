@@ -20,8 +20,10 @@ elma_sources = files(
     'src/editor/tool.cpp',
     'src/editor/topology.cpp',
     'src/editor/window.cpp',
+    'src/eol/api.cpp',
     'src/eol/battle.cpp',
     'src/eol/console.cpp',
+    'src/eol/curl.cpp',
     'src/eol/eol_table.cpp',
     'src/eol/eol.cpp',
     'src/eol/kuski.cpp',
@@ -121,6 +123,11 @@ else
     cpp_args += ['-Wno-deprecated-declarations', '-Wunreachable-code']
 endif
 
+libcurl_dep = dependency('libcurl',
+    static: build_machine.system() == 'windows'
+)
+gl_dep = dependency('gl', required: true)
+nlohmann_json_dep = dependency('nlohmann_json')
 sdl2_dep = dependency('sdl2',
     static: build_machine.system() == 'windows' or get_option('static_sdl'),
     default_options: {
@@ -129,11 +136,7 @@ sdl2_dep = dependency('sdl2',
     }
 )
 
-gl_dep = dependency('gl', required: true)
-
-nlohmann_json_dep = dependency('nlohmann_json')
-
-deps += [nlohmann_json_dep, gl_dep, sdl2_dep]
+deps += [libcurl_dep, gl_dep, nlohmann_json_dep, sdl2_dep]
 
 executable(
     'elma',
