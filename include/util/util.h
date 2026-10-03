@@ -1,10 +1,17 @@
 #ifndef UTIL_UTIL_H
 #define UTIL_UTIL_H
 
-#include <fstream>
+#include <cstdio>
 #include <optional>
 
 constexpr double PI = 3.141592;
+
+namespace util::math {
+
+// fmod with the result wrapped into [0, mod).
+double positive_fmod(double val, double mod);
+
+} // namespace util::math
 
 namespace util::random {
 

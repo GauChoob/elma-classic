@@ -1,4 +1,5 @@
 #include "main.h"
+#include "api/api.h"
 #include "editor/canvas.h"
 #include "eol/eol.h"
 #include "eol/settings.h"
@@ -32,22 +33,33 @@ eol* EolClient = nullptr;
 int main() {
     util::random::seed();
 
+    std::filesystem::create_directory("lev");
+    std::filesystem::create_directory("rec");
+
     EolSettings = new eol_settings();
     eol_settings::read_settings();
+    if (const char* overrides = std::getenv("EOL_SETTINGS_OVERRIDES")) {
+        eol_settings::read_overrides(overrides);
+    }
 
     SCREEN_WIDTH = EolSettings->screen_width();
     SCREEN_HEIGHT = EolSettings->screen_height();
-    editor_canvas_update_resolution();
 
     platform_init();
+    editor_canvas_update_resolution();
 
     EolClient = new eol();
     EolClient->connect();
 
+    eol_api::init();
+
     menu_intro();
 }
 
-void quit() { exit(0); }
+void quit() {
+    eol_api::cleanup();
+    exit(0);
+}
 
 bool ErrorGraphicsLoaded = false;
 
@@ -58,7 +70,7 @@ bool ErrorGraphicsLoaded = false;
 
     if (InError) {
         message_box("A fatal error occurred. Details written to eol.log.");
-        quit();
+        exit(1);
     }
     InError = true;
 
@@ -91,7 +103,6 @@ void internal_error(const std::string& message, std::source_location loc) {
 void external_error(const std::string& message, std::source_location loc) {
     if (message.find("memory") != std::string::npos) {
         handle_error("Sorry, out of memory!", message, loc);
-    } else {
-        handle_error("External error encountered:", message, loc);
     }
+    handle_error("External error encountered:", message, loc);
 }

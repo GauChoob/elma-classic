@@ -1,9 +1,9 @@
 #include "pic/lgr.h"
+#include "api/api.h"
 #include "debug/profiler.h"
 #include "editor/dialog.h"
 #include "editor/editor.h"
 #include "eol/settings.h"
-#include "game/level_load.h"
 #include "level/level.h"
 #include "level/sprite.h"
 #include "main.h"
@@ -66,11 +66,23 @@ constexpr char FANCYBOOST_NAMES[256][10] = {
     "zz281000", "zz2868B4", "zz789CDC", "zz5810D4", "zz303050", "zz5894C4", "zzDC0000", "zzD4D4D4",
     "zz00089C", "zz0094C4", "zz585050", "zz48DC28", "zz1050AC", "zzE48060", "zzCC4018", "zzFCFCFC"};
 
-void invalidate_lgr_cache() {
-    invalidate_level();
-    CurrentLgrName[0] = '\0';
+void lgrfile::invalidate_lgr_cache() { CurrentLgrName[0] = '\0'; }
+
+void lgrfile::recreate_lgr_if_needed() {
+    if (CurrentLgrName[0]) {
+        return;
+    }
+
+    lgrfile::load_lgr_file(Level->lgr_name, false);
+
+    Lgr->pal->set();
+    canvas::invalidate_canvases();
+    reset_game_background();
 }
 
+const char* lgrfile::current_lgr_name() { return CurrentLgrName; }
+
+// If `lgr_name` does not exist, only show a dialog if `backup_lgr` is not NULL.
 static bool lgr_exists(const char* lgr_name, const char* backup_lgr) {
     filepath path;
     sprintf(path, "lgr/%s.lgr", lgr_name);
@@ -92,19 +104,28 @@ static bool lgr_exists(const char* lgr_name, const char* backup_lgr) {
     if (!InEditor) {
         EditorPalette->set();
     }
-    char backup_text[100];
-    sprintf(backup_text, "This file doesn't exist in the LGR directory, so %s will be loaded.",
-            backup_lgr);
-    dialog("LGR file not found!",
-           "The level file uses the pictures that are stored in this LGR file:", filename,
-           backup_text,
-           "This level file will look now different from that it was designed to look.");
+    char text1[100];
+    sprintf(text1, "Try to download %s.lgr from the web?", lgr_name);
+    char text2[100];
+    sprintf(text2, "Otherwise, %s will be loaded.", backup_lgr);
+    int choice = dialog("LGR file not found!", text1, text2, DIALOG_BUTTONS, "Download", "Skip");
+    bool exists = false;
+    if (choice == 0) {
+        dialog("Downloading...", DIALOG_BUTTONS, DIALOG_RETURN);
+        std::optional<std::string> error = eol_api::lgr_get(lgr_name);
+        if (error) {
+            char error_title[100];
+            sprintf(error_title, "Failed to download %s.lgr", lgr_name);
+            dialog(error_title, error.value().c_str());
+        }
+        exists = lgr_exists(lgr_name, nullptr);
+    }
     if (!InEditor) {
         MenuPalette->set();
         blit8(BufferMain, BufferBall);
         blit_to_screen(BufferMain);
     }
-    return false;
+    return exists;
 }
 
 bool lgrfile::try_load_lgr(const char* name, const char* desc) {
@@ -122,7 +143,7 @@ bool lgrfile::try_load_lgr(const char* name, const char* desc) {
     return true;
 }
 
-void lgrfile::load_lgr_file(const char* lgr_name) {
+void lgrfile::load_lgr_file(const char* lgr_name, bool warn_missing) {
     if (strlen(lgr_name) > MAX_FILENAME_LEN) {
         internal_error("load_lgr_file strlen( lgr_name ) > MAX_FILENAME_LEN!");
     }
@@ -142,13 +163,13 @@ void lgrfile::load_lgr_file(const char* lgr_name) {
 
     if (!is_default && !override_is_same) {
         const char* desc = override_is_default ? "default.lgr" : "the default lgr file";
-        if (try_load_lgr(lgr_load_name, desc)) {
+        if (try_load_lgr(lgr_load_name, warn_missing ? desc : nullptr)) {
             return;
         }
     }
 
     if (!override_is_default) {
-        if (try_load_lgr(default_override.c_str(), "default.lgr")) {
+        if (try_load_lgr(default_override.c_str(), warn_missing ? "default.lgr" : nullptr)) {
             return;
         }
     }
@@ -174,10 +195,10 @@ void lgrfile::chop_bike(pic8* bike, bike_pics* bp) {
     bike_slice(bike, &bp->bike_part4, &BikeBox4);
 }
 
-// Tile a texture horizontally to fit SCREEN_WIDTH.
-static pic8* generate_default_texture(texture* text) {
+// Tile a texture horizontally to fit width.
+static pic8* generate_default_texture(texture* text, int width) {
     int original_width = text->original_width;
-    int tiles = (SCREEN_WIDTH + original_width - 1) / original_width + 1;
+    int tiles = (width + original_width - 1) / original_width + 1;
 
     pic8* tiled = new pic8(original_width * tiles, text->pic->get_height());
     for (int i = 0; i < tiles; i++) {
@@ -466,7 +487,7 @@ static void create_mask(mask* dest, pic8* pic, int transparency) {
     delete pic;
 }
 
-void create_grass_mask(mask& msk, int* heightmap, int skip_rows) {
+void create_grass_mask(mask& msk, const int* heightmap, int skip_rows) {
     int width = msk.width;
     int height = msk.height;
 
@@ -1063,8 +1084,8 @@ lgrfile::~lgrfile() {
         internal_error("lgrfile::~lgrfile !palette || !pal_data || !timer_palette_map!");
     }
     delete pal;
-    delete palette_data;
-    delete timer_palette_map;
+    delete[] palette_data;
+    delete[] timer_palette_map;
     pal = nullptr;
     palette_data = nullptr;
     timer_palette_map = nullptr;
@@ -1160,7 +1181,7 @@ void lgrfile::sanitize_default_texture_names(char* fg_name, char* bg_name) {
     }
 }
 
-void lgrfile::reload_default_textures(level& lev, bool force) {
+void lgrfile::reload_default_textures(level& lev, int width) {
     char level_foreground_name[10] = {};
     char level_background_name[10] = {};
     if (EolSettings->default_ground()) {
@@ -1176,7 +1197,8 @@ void lgrfile::reload_default_textures(level& lev, bool force) {
     sanitize_default_texture_names(level_foreground_name, level_background_name);
 
     // Recreate background texture
-    if (force || strcmpi(background_name, level_background_name) != 0) {
+    if (strcmpi(background_name, level_background_name) != 0 || !background ||
+        background->get_width() - background_original_width < width) {
         strcpy(background_name, level_background_name);
         delete background;
         background = nullptr;
@@ -1187,11 +1209,12 @@ void lgrfile::reload_default_textures(level& lev, bool force) {
         }
         texture* text = &textures[index];
         background_original_width = text->original_width;
-        background = generate_default_texture(text);
+        background = generate_default_texture(text, width);
     }
 
     // Recreate foreground texture
-    if (force || strcmpi(foreground_name, level_foreground_name) != 0) {
+    if (strcmpi(foreground_name, level_foreground_name) != 0 || !foreground ||
+        foreground->get_width() - foreground_original_width < width) {
         strcpy(foreground_name, level_foreground_name);
         delete foreground;
         foreground = nullptr;
@@ -1202,7 +1225,7 @@ void lgrfile::reload_default_textures(level& lev, bool force) {
         }
         texture* text = &textures[index];
         foreground_original_width = text->original_width;
-        foreground = generate_default_texture(text);
+        foreground = generate_default_texture(text, width);
     }
 }
 

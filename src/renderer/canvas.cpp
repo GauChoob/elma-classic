@@ -24,6 +24,8 @@ canvas* CanvasBack = nullptr;
 canvas* CanvasFront = nullptr;
 canvas* CanvasMinimap = nullptr;
 
+static bool CanvasesInvalidated = false;
+
 constexpr int RIGHTMOST_CHUNK_WIDTH = 1000000;
 
 constexpr int DISTANCE_DEFAULT = 1000000;
@@ -431,6 +433,7 @@ void canvas::linked_list_to_array() {
 }
 
 void canvas::calculate_object_positions() const {
+    const double y_sign = Level->objects_flipped ? 1 : -1;
     const double offset = ANIM_WIDTH / 2.0 * EolSettings->zoom();
     for (int i = 0; i < MAX_OBJECTS; i++) {
         object* obj = Level->objects[i];
@@ -439,10 +442,10 @@ void canvas::calculate_object_positions() const {
         }
         if (is_minimap) {
             obj->minimap_canvas_x = (int)((obj->r.x - origin.x) * MetersToMinimapPixels);
-            obj->minimap_canvas_y = (int)((-obj->r.y - origin.y) * MetersToMinimapPixels);
+            obj->minimap_canvas_y = (int)((y_sign * obj->r.y - origin.y) * MetersToMinimapPixels);
         } else {
             obj->canvas_x = (int)((obj->r.x - origin.x) * MetersToPixels - offset);
-            obj->canvas_y = (int)((-obj->r.y - origin.y) * MetersToPixels - offset);
+            obj->canvas_y = (int)((y_sign * obj->r.y - origin.y) * MetersToPixels - offset);
         }
     }
 }
@@ -1005,6 +1008,8 @@ void canvas::draw_killers() {
         return;
     }
 
+    const double y_sign = Level->objects_flipped ? 1 : -1;
+
     for (int i = 0; i < MAX_OBJECTS; i++) {
         object* obj = Level->objects[i];
         if (!obj) {
@@ -1021,7 +1026,7 @@ void canvas::draw_killers() {
             unsigned char* source = Lgr->minimap_killer_palette_id;
             int distance = 499;
             int x = (int)((obj->r.x - origin.x) * MetersToMinimapPixels);
-            int y = (int)((-obj->r.y - origin.y) * MetersToMinimapPixels);
+            int y = (int)((y_sign * obj->r.y - origin.y) * MetersToMinimapPixels);
             canvas_pixels source_pixels = canvas_pixels::pointer(source);
             draw_pixels(source_pixels, distance, x - 1, x + 1, y - 1, Clipping::Unclipped);
             draw_pixels(source_pixels, distance, x - 1, x - 1, y, Clipping::Unclipped);
@@ -1181,7 +1186,7 @@ canvas::~canvas() {
     if (!chunk_array) {
         internal_error("canvas::~canvas !chunk_array!");
     }
-    delete chunk_array;
+    delete[] chunk_array;
     chunk_array = nullptr;
 }
 
@@ -1560,7 +1565,7 @@ void canvas::create_front_grass() {
 
 void canvas::create_canvases() {
     START_TIME(canvas_timer);
-    Lgr->reload_default_textures(*Level, false);
+    Lgr->reload_default_textures(*Level, SCREEN_WIDTH);
 
     delete CanvasBack;
     CanvasBack = nullptr;
@@ -1635,6 +1640,8 @@ void canvas::create_canvases() {
     CanvasBack->calculate_object_positions();
     CanvasMinimap->calculate_object_positions();
 
+    CanvasesInvalidated = false;
+
     END_TIME(canvas_timer, std::format("Canvases"));
 }
 
@@ -1677,4 +1684,12 @@ canvas_chunk_node* node_finder::get_chunk(int x, int y) {
 bool canvas::bike_out_of_bounds(vect2 pos) {
     vect2 relative_pos = pos - origin;
     return relative_pos.x < OUT_OF_BOUNDS_LEFT || relative_pos.y < OUT_OF_BOUNDS_BOTTOM;
+}
+
+void canvas::invalidate_canvases() { CanvasesInvalidated = true; }
+
+void canvas::recreate_canvases_if_needed() {
+    if (CanvasesInvalidated) {
+        create_canvases();
+    }
 }

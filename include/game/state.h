@@ -1,5 +1,5 @@
-#ifndef STATE_H
-#define STATE_H
+#ifndef GAME_STATE_H
+#define GAME_STATE_H
 
 #include "platform/scancode.h"
 #include <cstdio>
@@ -20,7 +20,7 @@ struct player {
 };
 static_assert(sizeof(player) == 116);
 
-typedef char player_name[MAX_PLAYERNAME_LENGTH + 1];
+using player_name = char[MAX_PLAYERNAME_LENGTH + 1];
 
 struct topten {
     int times_count;
@@ -79,7 +79,10 @@ class state {
     DikScancode key_decrease_screen_size;
     DikScancode key_screenshot;
     DikScancode key_escape_alias;
+    combo_scancode key_high_quality;
     combo_scancode key_default_ground_sky;
+    combo_scancode key_zoom_out;
+    combo_scancode key_zoom_in;
 
     DikScancode key_replay_fast_2x;
     DikScancode key_replay_fast_4x;
@@ -90,12 +93,14 @@ class state {
     DikScancode key_replay_rewind;
 
     combo_scancode key_show_others;
+    combo_scancode key_shown_to;
     combo_scancode key_spy_next_kuski;
     combo_scancode key_spy_prev_kuski;
     combo_scancode key_battle_queue;
     combo_scancode key_download_battle_level;
     combo_scancode key_download_level;
     combo_scancode key_players_online;
+    combo_scancode key_best_times;
     combo_scancode key_battle_results;
     combo_scancode key_finished_times;
     combo_scancode key_cycle_finished_times_filter;

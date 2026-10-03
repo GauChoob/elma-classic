@@ -19,8 +19,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <optional>
+#include <string_view>
 
 constexpr int TOP_TEN_HEADER = 6754362;
 constexpr int TOP_TEN_FOOTER = 8674642;
@@ -390,9 +392,11 @@ bool level::is_sky(polygon* poly, vect2* point) {
     return intersections % 2;
 }
 
-std::optional<int> get_internal_index(const char* filename) {
-    if ((strlen(filename) != 12) || (strnicmp(filename, "QWQUU", 5) != 0) ||
-        (strnicmp(&filename[8], ".lev", 4) != 0)) {
+std::optional<int> get_internal_index(std::string_view filename) {
+    if (filename.size() == 12 && strnicmp(filename.data() + 8, ".lev", 4) == 0) {
+        filename.remove_suffix(4);
+    }
+    if (filename.size() != 8 || strnicmp(filename.data(), "QWQUU", 5) != 0) {
         return std::nullopt;
     }
 
@@ -404,7 +408,7 @@ std::optional<int> get_internal_index(const char* filename) {
     }
 
     int index = 100 * hundreds.value() + 10 * tens.value() + ones.value();
-    if (index > INTERNAL_LEVEL_COUNT) {
+    if (index < 1 || index > INTERNAL_LEVEL_COUNT) {
         return std::nullopt;
     }
 
@@ -578,6 +582,27 @@ static bool write_encrypted(void* buffer, int length, FILE* h) {
     return true;
 }
 
+static std::optional<std::filesystem::file_time_type> get_file_last_write_time(const char* path) {
+    namespace fs = std::filesystem;
+
+    std::error_code error;
+    fs::file_time_type timestamp = fs::last_write_time(path, error);
+    if (error) {
+        return std::nullopt;
+    }
+    return timestamp;
+}
+
+static std::filesystem::file_time_type get_file_last_write_time_or_error(const char* path) {
+    namespace fs = std::filesystem;
+
+    std::optional<fs::file_time_type> timestamp = get_file_last_write_time(path);
+    if (!timestamp.has_value()) {
+        external_error(std::string("Could not read file last write time: ") + path);
+    }
+    return *timestamp;
+}
+
 void level::from_file(const char* filename, bool internal) {
     objects_flipped = false;
     topology_errors = false;
@@ -599,6 +624,7 @@ void level::from_file(const char* filename, bool internal) {
     } else {
         filepath path;
         sprintf(path, "lev/%s", filename);
+        file_last_write_time = get_file_last_write_time_or_error(path);
         h = fopen(path, "rb");
     }
 
@@ -979,6 +1005,15 @@ void level::save(const char* filename, bool skip_topology) {
     }
 }
 
+bool level::file_has_changed(const char* filename) const {
+    namespace fs = std::filesystem;
+
+    filepath path;
+    sprintf(path, "lev/%s", filename);
+    std::optional<fs::file_time_type> timestamp = get_file_last_write_time(path);
+    return !timestamp.has_value() || *timestamp != file_last_write_time;
+}
+
 // Update top ten of an external level
 void level::save_topten(const char* filename) {
     if (topten_file_offset < 6) {
@@ -1012,6 +1047,7 @@ void level::save_topten(const char* filename) {
     }
 
     fclose(h);
+    file_last_write_time = get_file_last_write_time_or_error(path);
 }
 
 void level::get_boundaries(double* x1, double* y1, double* x2, double* y2,
