@@ -2,10 +2,20 @@
 #include "main.h"
 #include <cassert>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <format>
+
+namespace util::math {
+
+double positive_fmod(double val, double mod) {
+    const double rem = fmod(val, mod);
+    return rem < 0 ? rem + mod : rem;
+}
+
+} // namespace util::math
 
 namespace util::random {
 
@@ -113,7 +123,7 @@ void fwrite_array(const char* buffer, size_t size, FILE* h) {
     char clean_buffer[MAX_SIZE];
     strncpy(clean_buffer, buffer, size);
     if (fwrite(clean_buffer, 1, size, h) != size) {
-        external_error("Failed to write to file!");
+        internal_error("Failed to write to file!");
     }
 }
 

@@ -472,7 +472,7 @@ bool editor_window_save_as() {
                 char path[40];
                 strcpy(path, "lev/");
                 strcat(path, filename_input);
-                if (access(path, 0) == 0) {
+                if (std::filesystem::exists(path)) {
                     if (dialog("File exists, overwrite?", filename_input, DIALOG_BUTTONS, "Yes",
                                "No") == 1) {
                         return false;
@@ -945,7 +945,7 @@ bool editor_window_choose_lgr(pic8* dest, char* lgrname) {
     int list_length = populate_list("lgr/*.lgr", MAX_FILENAME_LEN);
 
     if (list_length < 1) {
-        external_error("There are no LGR files (*.lgr) in the LGR directory!");
+        internal_error("There are no LGR files (*.lgr) in the LGR directory!");
     }
 
     int selected_index = list_index(lgrname);
@@ -1544,7 +1544,7 @@ void editor_window_level_properties() {
         if (was_key_just_pressed(DIK_ESCAPE) || clicked_box(box_cancel)) {
             if (strcmpi(lgr_name, Level->lgr_name) != 0) {
                 // Revert lgr back to original
-                lgrfile::load_lgr_file(Level->lgr_name);
+                lgrfile::load_lgr_file(Level->lgr_name, true);
             }
             return;
         }
@@ -1591,7 +1591,7 @@ void editor_window_level_properties() {
             rerender = true;
         } else if (clicked_box(box_lgr)) {
             editor_window_choose_lgr(screen.pic(), lgr_name);
-            lgrfile::load_lgr_file(lgr_name);
+            lgrfile::load_lgr_file(lgr_name, true);
             rerender = true;
         }
         if (rerender) {

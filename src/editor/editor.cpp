@@ -7,6 +7,7 @@
 #include "editor/window.h"
 #include "game/game.h"
 #include "game/level_load.h"
+#include "game/recorder.h"
 #include "level/level.h"
 #include "level/object.h"
 #include "level/polygon.h"
@@ -20,9 +21,9 @@
 #include "platform/implementation.h"
 #include "platform/scancode.h"
 #include "platform/text_input.h"
-#include <climits>
 #include <cstring>
 #include <format>
+#include <limits>
 
 level* Level = nullptr;
 
@@ -543,7 +544,8 @@ static void select_tool(int tool) {
     invalidate_editor_gui();
 }
 
-static void editor_play(bool view_map) {
+static void editor_play() {
+    bool map_viewer = is_key_down(DIK_F1);
     invalidate_editor_gui();
     if (LevelChanged || State->editor_filename[0] == 0 || Level->topology_errors) {
         if (!editor_window_save()) {
@@ -559,7 +561,7 @@ static void editor_play(bool view_map) {
 
     Rec1->erase(State->editor_filename);
     Rec2->erase(State->editor_filename);
-    game_loop(State->editor_filename, view_map ? CameraMode::MapViewer : CameraMode::Normal);
+    game_loop(State->editor_filename, map_viewer ? CameraMode::MapViewer : CameraMode::Normal);
 
     empty_keypress_buffer();
 
@@ -693,8 +695,8 @@ void editor() {
 
         bool left_click = was_left_mouse_just_clicked();
         bool right_click = was_right_mouse_just_clicked();
-        int click_x = INT_MAX;
-        int click_y = INT_MAX;
+        int click_x = std::numeric_limits<int>::max();
+        int click_y = std::numeric_limits<int>::max();
         if (left_click || right_click) {
             get_mouse_position_editor(&click_x, &click_y);
             MouseX = click_x;
@@ -731,7 +733,7 @@ void editor() {
         } else if (i == 4 && right_click) {
             editor_help_save();
         } else if ((i == 5 && left_click) || editor_shortcut(DIK_P)) {
-            editor_play(is_key_down(DIK_F1));
+            editor_play();
             SelectedTool = Tool::Move;
         } else if (i == 5 && right_click) {
             editor_help_save_and_play();

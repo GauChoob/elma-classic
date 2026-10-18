@@ -8,7 +8,6 @@
 #include "level/level.h"
 #include "main.h"
 #include "menu/best_times.h"
-#include "menu/intro.h"
 #include "menu/nav.h"
 #include "menu/options.h"
 #include "menu/pic.h"
@@ -53,7 +52,7 @@ static void menu_demo() {
     }
 }
 
-static void menu_prompt_exit() {
+void menu_prompt_exit() {
     menu_nav nav("Do you want to quit?");
     nav.x_left = 300;
     nav.y_entries = 200;
@@ -68,7 +67,7 @@ static void menu_prompt_exit() {
             State->save();
             State->write_stats();
 
-            menu_exit();
+            quit();
         });
 
     nav.add_row("No");

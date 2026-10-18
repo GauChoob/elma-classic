@@ -1,18 +1,20 @@
 #include "menu/external.h"
+#include "editor/editor.h"
 #include "game/game.h"
 #include "game/level_load.h"
+#include "game/recorder.h"
 #include "game/state.h"
+#include "level/level.h"
 #include "main.h"
 #include "menu/nav.h"
 #include "menu/pic.h"
 #include "menu/play.h"
 #include "platform/implementation.h"
-#include "platform/scancode.h"
 #include "util/file_iter.h"
 #include <cstring>
 #include <string>
 
-static void play_external(const std::string& filename, bool map_viewer) {
+static void play_external(const std::string& filename) {
     if (filename.length() > MAX_FILENAME_LEN + 4) {
         internal_error("menu_external_levels() entry too long!");
     }
@@ -20,7 +22,11 @@ static void play_external(const std::string& filename, bool map_viewer) {
     strcpy(State->external_filename, filename_str);
 
     while (true) {
+        bool map_viewer = configure_game();
         loading_screen();
+        if (Level && level_file_exists(filename_str) && Level->file_has_changed(filename_str)) {
+            invalidate_level();
+        }
         if (!load_level_play(filename_str)) {
             return;
         }
@@ -35,7 +41,6 @@ static void play_external(const std::string& filename, bool map_viewer) {
             Rec2->erase(filename_str);
             return;
         }
-        map_viewer = is_key_down(DIK_F1);
     }
 }
 
@@ -50,7 +55,7 @@ static bool menu_external_levels_inner() {
     finame filename;
     bool done = find_first("lev/*.lev", filename, MAX_FILENAME_LEN);
     while (!done) {
-        nav.add_row(filename, NAV_FUNC() { play_external(left, is_key_down(DIK_F1)); });
+        nav.add_row(filename, NAV_FUNC() { play_external(left); });
         done = find_next(filename);
     }
     find_close();

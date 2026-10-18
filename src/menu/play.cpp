@@ -7,6 +7,7 @@
 #include "level/level.h"
 #include "main.h"
 #include "menu/best_times.h"
+#include "menu/dialog.h"
 #include "menu/external.h"
 #include "menu/nav.h"
 #include "menu/pic.h"
@@ -150,6 +151,12 @@ void update_top_ten(int time, char* time_message, int internal_index,
 
     // Not in top ten?
     if (tten->times_count == MAX_TIMES && tten->times[MAX_TIMES - 1] < time) {
+        return;
+    }
+
+    if (external_level && Level->file_has_changed(external_filename)) {
+        menu_dialog("The level file has changed", "after it was loaded!",
+                    "The time was not saved.");
         return;
     }
 
@@ -443,12 +450,13 @@ void loading_screen() {
     menu.render(true);
 }
 
-static void play_internal(int internal_index, bool map_viewer) {
+static void play_internal(int internal_index) {
     player* cur_player = State->get_player(State->player1);
     while (true) {
         finame filename;
         sprintf(filename, "QWQUU%03d.LEV", internal_index + 1);
 
+        bool map_viewer = configure_game();
         loading_screen();
 
         load_level_play(filename);
@@ -488,11 +496,9 @@ static void play_internal(int internal_index, bool map_viewer) {
             return;
         }
         if (choice == MenuLevel::PlayAgain) {
-            map_viewer = is_key_down(DIK_F1);
             continue;
         }
         if (choice == MenuLevel::PlayNext) {
-            map_viewer = is_key_down(DIK_F1);
             internal_index++;
             cur_player->selected_level = internal_index;
         }
@@ -556,7 +562,7 @@ void menu_play() {
                             player1->skipped[i] && !EolSettings->all_internals_accessible()
                                 ? "SKIPPED!"
                                 : get_internal_level_name(i));
-            nav.add_row(level_name, NAV_FUNC() { play_internal(choice - 1, is_key_down(DIK_F1)); });
+            nav.add_row(level_name, NAV_FUNC() { play_internal(choice - 1); });
         }
 
         int choice = nav.navigate();

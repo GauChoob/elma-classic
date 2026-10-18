@@ -1,21 +1,20 @@
 #include "eol/settings.h"
 #include "editor/editor.h"
-#include "game/level_load.h"
 #include "game/state.h"
+#include "level/level.h"
 #include "main.h"
 #include "physics/init.h"
 #include "pic/lgr.h"
+#include "pic/surface.h"
 #include "platform/implementation.h"
+#include "platform/utils.h"
+#include "renderer/canvas.h"
 #include "renderer/object_overlay.h"
+#include <filesystem>
 #include <fstream>
 #define JSON_DIAGNOSTICS 1
 #include <nlohmann/json.hpp>
 #include <utility>
-#ifdef _WIN32
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
 
 using json = nlohmann::ordered_json;
 
@@ -58,6 +57,7 @@ template struct Default<MapAlignment>;
 template struct Default<RendererType>;
 template struct Default<FullscreenMode>;
 template struct Default<ChatVisibility>;
+template struct Default<ShownTo>;
 template struct Default<DikScancode>;
 template struct Default<combo_scancode>;
 template struct Default<std::string>;
@@ -65,16 +65,24 @@ template struct Default<eol_table::Align>;
 template struct Clamp<int>;
 template struct Clamp<double>;
 
+void eol_settings::set_pictures_in_background(bool b) {
+    if (pictures_in_background_ == b) {
+        return;
+    }
+    pictures_in_background_ = b;
+    canvas::invalidate_canvases();
+}
+
 void eol_settings::set_default_ground(bool b) {
     default_ground_ = b;
     if (Level && Lgr) {
-        Lgr->reload_default_textures(*Level, false);
+        Lgr->reload_default_textures(*Level, SCREEN_WIDTH);
     }
 }
 void eol_settings::set_default_sky(bool b) {
     default_sky_ = b;
     if (Level && Lgr) {
-        Lgr->reload_default_textures(*Level, false);
+        Lgr->reload_default_textures(*Level, SCREEN_WIDTH);
     }
 }
 
@@ -95,8 +103,8 @@ void eol_settings::set_fullscreen(FullscreenMode f) {
     }
 
     fullscreen_ = f;
-    if (has_window()) {
-        platform_apply_fullscreen_mode();
+    if (has_window() && platform_apply_fullscreen_mode()) {
+        on_resolution_change();
     }
 }
 
@@ -104,7 +112,7 @@ void eol_settings::set_zoom(double z) {
     if (z != zoom_) {
         zoom_ = z;
         set_zoom_factor();
-        invalidate_lgr_cache();
+        lgrfile::invalidate_lgr_cache();
         init_gravity_arrows();
     }
 }
@@ -113,32 +121,54 @@ void eol_settings::set_minimap_zoom(double z) {
     if (z != minimap_zoom_) {
         minimap_zoom_ = z;
         set_minimap_zoom_factor();
-        invalidate_level();
+        canvas::invalidate_canvases();
     }
 }
 
 void eol_settings::set_zoom_textures(bool zoom_textures) {
     zoom_textures_ = zoom_textures;
 
-    invalidate_lgr_cache();
+    lgrfile::invalidate_lgr_cache();
 }
 
 void eol_settings::set_zoom_grass(bool zoom_grass) {
     zoom_grass_ = zoom_grass;
 
-    invalidate_lgr_cache();
+    lgrfile::invalidate_lgr_cache();
 }
 
 void eol_settings::set_default_lgr_name(std::string name) {
-    if (default_lgr_name_.value != name) {
-        default_lgr_name_ = std::move(name);
-        invalidate_lgr_cache();
+    if (default_lgr_name_.value == name) {
+        return;
     }
+
+    if (!Level || !Lgr) {
+        default_lgr_name_ = std::move(name);
+        return;
+    }
+
+    if (strcmpi(Level->lgr_name, "default") == 0) {
+        // Level uses default.lgr
+        lgrfile::invalidate_lgr_cache();
+    } else if (strcmpi(lgrfile::current_lgr_name(), "default") == 0) {
+        // Level does not use default.lgr, but we are using default.lgr as a fallback
+        lgrfile::invalidate_lgr_cache();
+    } else if (strcmpi(Level->lgr_name, default_lgr_name_.value.c_str()) != 0 &&
+               strcmpi(lgrfile::current_lgr_name(), default_lgr_name_.value.c_str()) == 0) {
+        // Level does not use the previous default_lgr_name,
+        // but we are using the previous default_lgr_name as an override
+        lgrfile::invalidate_lgr_cache();
+    } else {
+        // The level was using a non-default LGR, don't invalidate the cache since the
+        // default is not currently loaded.
+    }
+
+    default_lgr_name_ = std::move(name);
 }
 
 void eol_settings::set_fancyboost(bool b) {
     fancyboost_ = b;
-    invalidate_lgr_cache();
+    lgrfile::invalidate_lgr_cache();
 }
 
 void eol_settings::set_cripple_no_throttle(bool b) {
@@ -310,6 +340,32 @@ void from_json(const json& j, ChatVisibility& c) {
     }
 }
 
+void to_json(json& j, const ShownTo& h) {
+    switch (h) {
+    case ShownTo::Everyone:
+        j = "everyone";
+        break;
+    case ShownTo::Team:
+        j = "team";
+        break;
+    case ShownTo::Nobody:
+        j = "nobody";
+        break;
+    }
+}
+
+void from_json(const json& j, ShownTo& h) {
+    if (j == "everyone") {
+        h = ShownTo::Everyone;
+    } else if (j == "team") {
+        h = ShownTo::Team;
+    } else if (j == "nobody") {
+        h = ShownTo::Nobody;
+    } else {
+        throw("[json.exception.type_error.302] (/shown_to) invalid value");
+    }
+}
+
 void to_json(json& j, const combo_scancode& r) { j = (unsigned long long)(r); }
 
 void from_json(const json& j, combo_scancode& r) { r = combo_scancode((unsigned long long)(j)); }
@@ -318,10 +374,13 @@ void from_json(const json& j, combo_scancode& r) { r = combo_scancode((unsigned 
     JSON_FIELD(screen_width)                                                                       \
     JSON_FIELD(screen_height)                                                                      \
                                                                                                    \
+    JSON_FIELD(high_quality_key)                                                                   \
     JSON_FIELD(pictures_in_background)                                                             \
     JSON_FIELD(default_ground)                                                                     \
     JSON_FIELD(default_sky)                                                                        \
     JSON_FIELD(default_ground_sky_key)                                                             \
+    JSON_FIELD(zoom_out_key)                                                                       \
+    JSON_FIELD(zoom_in_key)                                                                        \
                                                                                                    \
     JSON_FIELD(center_camera)                                                                      \
     JSON_FIELD(center_map)                                                                         \
@@ -352,12 +411,14 @@ void from_json(const json& j, combo_scancode& r) { r = combo_scancode((unsigned 
     JSON_FIELD(replay_rewind_key)                                                                  \
                                                                                                    \
     JSON_FIELD(show_others_key)                                                                    \
+    JSON_FIELD(shown_to_key)                                                                       \
     JSON_FIELD(spy_next_kuski_key)                                                                 \
     JSON_FIELD(spy_prev_kuski_key)                                                                 \
     JSON_FIELD(battle_queue_key)                                                                   \
     JSON_FIELD(download_battle_level_key)                                                          \
     JSON_FIELD(download_level_key)                                                                 \
     JSON_FIELD(players_online_key)                                                                 \
+    JSON_FIELD(best_times_key)                                                                     \
     JSON_FIELD(battle_results_key)                                                                 \
     JSON_FIELD(finished_times_key)                                                                 \
     JSON_FIELD(cycle_finished_times_filter_key)                                                    \
@@ -371,6 +432,7 @@ void from_json(const json& j, combo_scancode& r) { r = combo_scancode((unsigned 
     JSON_FIELD(battle_status_key)                                                                  \
     JSON_FIELD(battle_leader_key)                                                                  \
     JSON_FIELD(speedometer_key)                                                                    \
+    JSON_FIELD(download_battle_rec_key)                                                            \
     JSON_FIELD(reconnect_key)                                                                      \
     JSON_FIELD(disconnect_key)                                                                     \
     JSON_FIELD(toggle_one_wheel_status_key)                                                        \
@@ -380,6 +442,7 @@ void from_json(const json& j, combo_scancode& r) { r = combo_scancode((unsigned 
     JSON_FIELD(fancyboost)                                                                         \
                                                                                                    \
     JSON_FIELD(show_last_apple_time)                                                               \
+    JSON_FIELD(show_lev_name_in_rec)                                                               \
     JSON_FIELD(show_gravity_arrows)                                                                \
                                                                                                    \
     JSON_FIELD(show_fps)                                                                           \
@@ -396,10 +459,19 @@ void from_json(const json& j, combo_scancode& r) { r = combo_scancode((unsigned 
     JSON_FIELD(still_objects)                                                                      \
     JSON_FIELD(all_internals_accessible)                                                           \
     JSON_FIELD(show_total_time)                                                                    \
+    JSON_FIELD(show_timer_player_a)                                                                \
+    JSON_FIELD(show_timer_player_b)                                                                \
+    JSON_FIELD(show_minimap_player_a)                                                              \
+    JSON_FIELD(show_minimap_player_b)                                                              \
+    JSON_FIELD(show_replay_timer_player_a)                                                         \
+    JSON_FIELD(show_replay_timer_player_b)                                                         \
+    JSON_FIELD(show_replay_minimap_player_a)                                                       \
+    JSON_FIELD(show_replay_minimap_player_b)                                                       \
     JSON_FIELD(minimap_width)                                                                      \
     JSON_FIELD(minimap_height)                                                                     \
     JSON_FIELD(minimap_opacity)                                                                    \
     JSON_FIELD(chat_lines)                                                                         \
+    JSON_FIELD(large_font)                                                                         \
     JSON_FIELD(cripple_no_brake)                                                                   \
     JSON_FIELD(cripple_no_throttle)                                                                \
     JSON_FIELD(cripple_always_throttle)                                                            \
@@ -409,9 +481,12 @@ void from_json(const json& j, combo_scancode& r) { r = combo_scancode((unsigned 
     JSON_FIELD(cripple_drunk)                                                                      \
     JSON_FIELD(cripple_one_wheel)                                                                  \
     JSON_FIELD(show_one_wheel_status)                                                              \
+                                                                                                   \
     JSON_FIELD(hostname)                                                                           \
+    JSON_FIELD(api_name)                                                                           \
     JSON_FIELD(tcp_port)                                                                           \
     JSON_FIELD(udp_port)                                                                           \
+                                                                                                   \
     JSON_FIELD(nick)                                                                               \
     JSON_FIELD(password)                                                                           \
     JSON_FIELD(play_offline)                                                                       \
@@ -423,7 +498,8 @@ void from_json(const json& j, combo_scancode& r) { r = combo_scancode((unsigned 
     JSON_FIELD(show_speedometer)                                                                   \
                                                                                                    \
     JSON_FIELD(table_alignment)                                                                    \
-    JSON_FIELD(chat_visibility)
+    JSON_FIELD(chat_visibility)                                                                    \
+    JSON_FIELD(shown_to)
 
 #define JSON_FIELD(name)                                                                           \
     void eol_settings::persist_##name(decltype(eol_settings::name##_.value) v) {                   \
@@ -440,32 +516,47 @@ void to_json(json& j, const eol_settings& s) { j = json{FIELD_LIST}; }
 #define JSON_FIELD(name)                                                                           \
     {                                                                                              \
         try {                                                                                      \
-            auto value = j.value(#name, s.name##_persisted());                                     \
-            s.persist_##name(std::move(value));                                                    \
+            auto value = j.value(#name, persist ? s.name##_persisted() : s.name());                \
+            if (persist) {                                                                         \
+                s.persist_##name(std::move(value));                                                \
+            } else {                                                                               \
+                s.set_##name(std::move(value));                                                    \
+            }                                                                                      \
         } catch (json::exception & e) {                                                            \
-            external_error(std::string("Invalid parameter in " SETTINGS_JSON "!\n") + e.what());   \
+            internal_error(std::string("Invalid parameter in ") + file + "!\n" + e.what());        \
         } catch (const char* e) {                                                                  \
-            external_error(std::string("Invalid parameter in " SETTINGS_JSON "!\n") + e);          \
+            internal_error(std::string("Invalid parameter in ") + file + "!\n" + e);               \
         }                                                                                          \
     }
-void from_json(const json& j, eol_settings& s) { FIELD_LIST }
+static void apply_json(const json& j, eol_settings& s, bool persist, const std::string& file) {
+    FIELD_LIST
+}
 #undef JSON_FIELD
 
-void eol_settings::read_settings() {
-    if (access(SETTINGS_JSON, 0) != 0) {
-        return;
-    }
-    std::ifstream i(SETTINGS_JSON);
+static void read_json(const std::string& file, bool persist) {
+    std::ifstream i(file);
     json j = json::parse(i, nullptr, false);
-    if (!j.is_discarded()) {
-        *EolSettings = j;
-    } else {
-        external_error(SETTINGS_JSON " is corrupt! Please fix this or delete the file!");
+    if (j.is_discarded() || !j.is_object()) {
+        internal_error(file + " is corrupt! Please fix this or delete the file!");
+    }
+    apply_json(j, *EolSettings, persist, file);
+}
+
+void eol_settings::read_settings() {
+    if (std::filesystem::exists(SETTINGS_JSON)) {
+        read_json(SETTINGS_JSON, true);
     }
 }
 
+void eol_settings::read_overrides(const std::string& file) {
+    if (!std::filesystem::exists(file)) {
+        internal_error(file + " not found!");
+    }
+    read_json(file, false);
+}
+
 void eol_settings::write_settings() {
-    std::ofstream o("settings.json");
+    std::ofstream o(SETTINGS_JSON);
     json j = *EolSettings;
     o << std::setw(4) << j << std::endl;
 }
@@ -483,7 +574,10 @@ void eol_settings::sync_controls_to_state(state* s) {
     s->keys2.one_frame_brake = EolSettings->one_frame_brake_key_player_b();
 
     s->key_escape_alias = EolSettings->escape_alias_key();
+    s->key_high_quality = EolSettings->high_quality_key();
     s->key_default_ground_sky = EolSettings->default_ground_sky_key();
+    s->key_zoom_out = EolSettings->zoom_out_key();
+    s->key_zoom_in = EolSettings->zoom_in_key();
 
     s->key_replay_fast_2x = EolSettings->replay_fast_2x_key();
     s->key_replay_fast_4x = EolSettings->replay_fast_4x_key();
@@ -494,12 +588,14 @@ void eol_settings::sync_controls_to_state(state* s) {
     s->key_replay_rewind = EolSettings->replay_rewind_key();
 
     s->key_show_others = EolSettings->show_others_key();
+    s->key_shown_to = EolSettings->shown_to_key();
     s->key_spy_next_kuski = EolSettings->spy_next_kuski_key();
     s->key_spy_prev_kuski = EolSettings->spy_prev_kuski_key();
     s->key_battle_queue = EolSettings->battle_queue_key();
     s->key_download_battle_level = EolSettings->download_battle_level_key();
     s->key_download_level = EolSettings->download_level_key();
     s->key_players_online = EolSettings->players_online_key();
+    s->key_best_times = EolSettings->best_times_key();
     s->key_battle_results = EolSettings->battle_results_key();
     s->key_finished_times = EolSettings->finished_times_key();
     s->key_cycle_finished_times_filter = EolSettings->cycle_finished_times_filter_key();
@@ -513,6 +609,7 @@ void eol_settings::sync_controls_to_state(state* s) {
     s->key_battle_status = EolSettings->battle_status_key();
     s->key_battle_leader = EolSettings->battle_leader_key();
     s->key_speedometer = EolSettings->speedometer_key();
+    s->key_download_battle_rec = EolSettings->download_battle_rec_key();
     s->key_reconnect = EolSettings->reconnect_key();
     s->key_disconnect = EolSettings->disconnect_key();
     s->key_toggle_one_wheel_status = EolSettings->toggle_one_wheel_status_key();
@@ -532,7 +629,10 @@ void eol_settings::sync_controls_from_state(state* s) {
     EolSettings->persist_one_frame_brake_key_player_b(s->keys2.one_frame_brake);
 
     EolSettings->persist_escape_alias_key(s->key_escape_alias);
+    EolSettings->persist_high_quality_key(s->key_high_quality);
     EolSettings->persist_default_ground_sky_key(s->key_default_ground_sky);
+    EolSettings->persist_zoom_out_key(s->key_zoom_out);
+    EolSettings->persist_zoom_in_key(s->key_zoom_in);
 
     EolSettings->persist_replay_fast_2x_key(s->key_replay_fast_2x);
     EolSettings->persist_replay_fast_4x_key(s->key_replay_fast_4x);
@@ -543,12 +643,14 @@ void eol_settings::sync_controls_from_state(state* s) {
     EolSettings->persist_replay_rewind_key(s->key_replay_rewind);
 
     EolSettings->persist_show_others_key(s->key_show_others);
+    EolSettings->persist_shown_to_key(s->key_shown_to);
     EolSettings->persist_spy_next_kuski_key(s->key_spy_next_kuski);
     EolSettings->persist_spy_prev_kuski_key(s->key_spy_prev_kuski);
     EolSettings->persist_battle_queue_key(s->key_battle_queue);
     EolSettings->persist_download_battle_level_key(s->key_download_battle_level);
     EolSettings->persist_download_level_key(s->key_download_level);
     EolSettings->persist_players_online_key(s->key_players_online);
+    EolSettings->persist_best_times_key(s->key_best_times);
     EolSettings->persist_battle_results_key(s->key_battle_results);
     EolSettings->persist_finished_times_key(s->key_finished_times);
     EolSettings->persist_cycle_finished_times_filter_key(s->key_cycle_finished_times_filter);
@@ -562,6 +664,7 @@ void eol_settings::sync_controls_from_state(state* s) {
     EolSettings->persist_battle_status_key(s->key_battle_status);
     EolSettings->persist_battle_leader_key(s->key_battle_leader);
     EolSettings->persist_speedometer_key(s->key_speedometer);
+    EolSettings->persist_download_battle_rec_key(s->key_download_battle_rec);
     EolSettings->persist_reconnect_key(s->key_reconnect);
     EolSettings->persist_disconnect_key(s->key_disconnect);
     EolSettings->persist_toggle_one_wheel_status_key(s->key_toggle_one_wheel_status);
