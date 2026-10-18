@@ -210,6 +210,7 @@ libcurl_dep = dependency('libcurl',
         # SSL
         'ssl': 'enabled',
         'tls-srp': 'disabled', # deprecated CURLOPT_TLSAUTH_TYPE
+        'openssl': build_machine.system() == 'darwin' and host_machine.cpu_family() == 'aarch64' ? 'disabled' : 'auto',
 
         # Protocols
         'dict': 'disabled',
