@@ -1,9 +1,9 @@
 #include "pic/lgr.h"
+#include "api/api.h"
 #include "debug/profiler.h"
 #include "editor/dialog.h"
 #include "editor/editor.h"
 #include "eol/settings.h"
-#include "game/level_load.h"
 #include "level/level.h"
 #include "level/sprite.h"
 #include "main.h"
@@ -66,11 +66,23 @@ constexpr char FANCYBOOST_NAMES[256][10] = {
     "zz281000", "zz2868B4", "zz789CDC", "zz5810D4", "zz303050", "zz5894C4", "zzDC0000", "zzD4D4D4",
     "zz00089C", "zz0094C4", "zz585050", "zz48DC28", "zz1050AC", "zzE48060", "zzCC4018", "zzFCFCFC"};
 
-void invalidate_lgr_cache() {
-    invalidate_level();
-    CurrentLgrName[0] = '\0';
+void lgrfile::invalidate_lgr_cache() { CurrentLgrName[0] = '\0'; }
+
+void lgrfile::recreate_lgr_if_needed() {
+    if (CurrentLgrName[0]) {
+        return;
+    }
+
+    lgrfile::load_lgr_file(Level->lgr_name, false);
+
+    Lgr->pal->set();
+    canvas::invalidate_canvases();
+    reset_game_background();
 }
 
+const char* lgrfile::current_lgr_name() { return CurrentLgrName; }
+
+// If `lgr_name` does not exist, only show a dialog if `backup_lgr` is not NULL.
 static bool lgr_exists(const char* lgr_name, const char* backup_lgr) {
     filepath path;
     sprintf(path, "lgr/%s.lgr", lgr_name);
@@ -92,19 +104,28 @@ static bool lgr_exists(const char* lgr_name, const char* backup_lgr) {
     if (!InEditor) {
         EditorPalette->set();
     }
-    char backup_text[100];
-    sprintf(backup_text, "This file doesn't exist in the LGR directory, so %s will be loaded.",
-            backup_lgr);
-    dialog("LGR file not found!",
-           "The level file uses the pictures that are stored in this LGR file:", filename,
-           backup_text,
-           "This level file will look now different from that it was designed to look.");
+    char text1[100];
+    sprintf(text1, "Try to download %s.lgr from the web?", lgr_name);
+    char text2[100];
+    sprintf(text2, "Otherwise, %s will be loaded.", backup_lgr);
+    int choice = dialog("LGR file not found!", text1, text2, DIALOG_BUTTONS, "Download", "Skip");
+    bool exists = false;
+    if (choice == 0) {
+        dialog("Downloading...", DIALOG_BUTTONS, DIALOG_RETURN);
+        std::optional<std::string> error = eol_api::lgr_get(lgr_name);
+        if (error) {
+            char error_title[100];
+            sprintf(error_title, "Failed to download %s.lgr", lgr_name);
+            dialog(error_title, error.value().c_str());
+        }
+        exists = lgr_exists(lgr_name, nullptr);
+    }
     if (!InEditor) {
         MenuPalette->set();
         blit8(BufferMain, BufferBall);
         blit_to_screen(BufferMain);
     }
-    return false;
+    return exists;
 }
 
 bool lgrfile::try_load_lgr(const char* name, const char* desc) {
@@ -122,7 +143,7 @@ bool lgrfile::try_load_lgr(const char* name, const char* desc) {
     return true;
 }
 
-void lgrfile::load_lgr_file(const char* lgr_name) {
+void lgrfile::load_lgr_file(const char* lgr_name, bool warn_missing) {
     if (strlen(lgr_name) > MAX_FILENAME_LEN) {
         internal_error("load_lgr_file strlen( lgr_name ) > MAX_FILENAME_LEN!");
     }
@@ -142,13 +163,13 @@ void lgrfile::load_lgr_file(const char* lgr_name) {
 
     if (!is_default && !override_is_same) {
         const char* desc = override_is_default ? "default.lgr" : "the default lgr file";
-        if (try_load_lgr(lgr_load_name, desc)) {
+        if (try_load_lgr(lgr_load_name, warn_missing ? desc : nullptr)) {
             return;
         }
     }
 
     if (!override_is_default) {
-        if (try_load_lgr(default_override.c_str(), "default.lgr")) {
+        if (try_load_lgr(default_override.c_str(), warn_missing ? "default.lgr" : nullptr)) {
             return;
         }
     }
@@ -157,7 +178,7 @@ void lgrfile::load_lgr_file(const char* lgr_name) {
         return;
     }
 
-    external_error("Could not open file lgr/default.lgr!");
+    internal_error("Could not open file lgr/default.lgr!");
 }
 
 static void bike_slice(pic8* bike, pic8** ret, bike_box* bbox) {
@@ -174,10 +195,10 @@ void lgrfile::chop_bike(pic8* bike, bike_pics* bp) {
     bike_slice(bike, &bp->bike_part4, &BikeBox4);
 }
 
-// Tile a texture horizontally to fit SCREEN_WIDTH.
-static pic8* generate_default_texture(texture* text) {
+// Tile a texture horizontally to fit width.
+static pic8* generate_default_texture(texture* text, int width) {
     int original_width = text->original_width;
-    int tiles = (SCREEN_WIDTH + original_width - 1) / original_width + 1;
+    int tiles = (width + original_width - 1) / original_width + 1;
 
     pic8* tiled = new pic8(original_width * tiles, text->pic->get_height());
     for (int i = 0; i < tiles; i++) {
@@ -293,7 +314,7 @@ int read_varint(const unsigned char* buffer, int& offset) {
 //  }
 void lgrfile::add_picture(pic8* pic, piclist* list, int index) {
     if (picture_count >= MAX_PICTURES) {
-        external_error("Too many pictures in lgr file!");
+        internal_error("Too many pictures in lgr file!");
     }
 
     // Set picture properties
@@ -306,7 +327,7 @@ void lgrfile::add_picture(pic8* pic, piclist* list, int index) {
 
     int transparency = get_transparency_palette_id(list->transparency[index], pic);
     if (transparency < 0) {
-        external_error(std::string("Picture must be transparent in lgr file! ") + new_pic->name);
+        internal_error(std::string("Picture must be transparent in lgr file! ") + new_pic->name);
     }
 
     PictureBuffer.resize(0);
@@ -350,7 +371,7 @@ void lgrfile::add_picture(pic8* pic, piclist* list, int index) {
 
 void lgrfile::add_fancyboost(int size, int index) {
     if (picture_count >= MAX_PICTURES) {
-        external_error("Too many pictures in lgr file!");
+        internal_error("Too many pictures in lgr file!");
     }
 
     // Generate picture
@@ -380,7 +401,7 @@ void lgrfile::add_fancyboost(int size, int index) {
 
 void lgrfile::add_texture(pic8* pic, piclist* list, int index) {
     if (texture_count >= MAX_TEXTURES) {
-        external_error("Too many textures in lgr file!");
+        internal_error("Too many textures in lgr file!");
     }
 
     pic->vertical_flip();
@@ -466,7 +487,7 @@ static void create_mask(mask* dest, pic8* pic, int transparency) {
     delete pic;
 }
 
-void create_grass_mask(mask& msk, int* heightmap, int skip_rows) {
+void create_grass_mask(mask& msk, const int* heightmap, int skip_rows) {
     int width = msk.width;
     int height = msk.height;
 
@@ -524,7 +545,7 @@ void create_grass_mask(mask& msk, int* heightmap, int skip_rows) {
 
 void lgrfile::add_mask(pic8* pic, piclist* list, int index) {
     if (mask_count >= MAX_MASKS) {
-        external_error("Too many masks in lgr file!");
+        internal_error("Too many masks in lgr file!");
     }
 
     // Copy properties
@@ -578,7 +599,7 @@ static unsigned char* create_timer_palette_map(unsigned char* pal) {
     return map;
 }
 
-#define ERROR_CORRUPT() external_error(std::string("Corrupt LGR file!: ") + path)
+#define ERROR_CORRUPT() internal_error(std::string("Corrupt LGR file!: ") + path)
 
 // Read "LGR12" or "LGR13"
 static int read_version(FILE* h, const char* path) {
@@ -587,14 +608,14 @@ static int read_version(FILE* h, const char* path) {
         ERROR_CORRUPT();
     }
     if (strncmp(LGRXX, "LGR", 3) != 0) {
-        external_error(std::string("This is not an LGR file!: ") + path);
+        internal_error(std::string("This is not an LGR file!: ") + path);
     }
     if (LGRXX[3] < '0' || LGRXX[3] > '9' || LGRXX[4] < '0' || LGRXX[4] > '9') {
-        external_error(std::string("LGR file's version is too new!: ") + path);
+        internal_error(std::string("LGR file's version is too new!: ") + path);
     }
     int version = (LGRXX[3] - '0') * 10 + (LGRXX[4] - '0');
     if (version != 12 && version != 13) {
-        external_error(std::string("LGR file's version is too new!: ") + path);
+        internal_error(std::string("LGR file's version is too new!: ") + path);
     }
     return version;
 }
@@ -635,7 +656,7 @@ lgrfile::lgrfile(const char* lgrname) {
     sprintf(path, "lgr/%s.lgr", lgrname);
     FILE* h = fopen(path, "rb");
     if (!h) {
-        external_error(std::string("Cannot find file: ") + path);
+        internal_error(std::string("Cannot find file: ") + path);
     }
 
     int version = read_version(h, path);
@@ -798,11 +819,11 @@ lgrfile::lgrfile(const char* lgrname) {
 
         // Truncate file extension
         if (!strchr(asset_filename, '.')) {
-            external_error(std::string("Cannot find dot in name: ") + asset_filename);
+            internal_error(std::string("Cannot find dot in name: ") + asset_filename);
         }
         *strchr(asset_filename, '.') = 0;
         if (strlen(asset_filename) > MAX_FILENAME_LEN) {
-            external_error(std::string("Filename is too long in LGR file!: ") + asset_filename +
+            internal_error(std::string("Filename is too long in LGR file!: ") + asset_filename +
                            " " + path);
         }
 
@@ -816,7 +837,7 @@ lgrfile::lgrfile(const char* lgrname) {
         // Generic asset
         int index = list->get_index(asset_filename);
         if (index < 0) {
-            external_error(
+            internal_error(
                 std::string("There is no line in PICTURES.LST corresponding to picture: ") +
                 asset_filename);
         }
@@ -867,12 +888,12 @@ lgrfile::lgrfile(const char* lgrname) {
 
     // Check that the LGR is complete
     if (texture_count < 2) {
-        external_error(std::string("There must be at least two textures in LGR file! ") + lgrname);
+        internal_error(std::string("There must be at least two textures in LGR file! ") + lgrname);
     }
 
 #define ASSERT_EXISTS(var, name)                                                                   \
     if (!(var)) {                                                                                  \
-        external_error(std::string("Picture not found in LGR file!: ") + (name) + " " + path);     \
+        internal_error(std::string("Picture not found in LGR file!: ") + (name) + " " + path);     \
     }
 
     ASSERT_EXISTS(bike1.body, "q1body.pcx");
@@ -958,20 +979,20 @@ lgrfile::lgrfile(const char* lgrname) {
     // Check for duplicate names in pictures, masks and textures
     for (int i = 0; i < picture_count - 1; i++) {
         if (strcmpi(pictures[i].name, pictures[i + 1].name) == 0) {
-            external_error(std::string("Picture name is duplicated in LGR file!: ") +
+            internal_error(std::string("Picture name is duplicated in LGR file!: ") +
                            pictures[i].name);
         }
     }
 
     for (int i = 0; i < mask_count - 1; i++) {
         if (strcmpi(masks[i].name, masks[i + 1].name) == 0) {
-            external_error(std::string("Mask name is duplicated in LGR file!: ") + masks[i].name);
+            internal_error(std::string("Mask name is duplicated in LGR file!: ") + masks[i].name);
         }
     }
 
     for (int i = 0; i < texture_count - 1; i++) {
         if (strcmpi(textures[i].name, textures[i + 1].name) == 0) {
-            external_error(std::string("Texture name is duplicated in LGR file!: ") +
+            internal_error(std::string("Texture name is duplicated in LGR file!: ") +
                            textures[i].name);
         }
     }
@@ -995,7 +1016,7 @@ lgrfile::lgrfile(const char* lgrname) {
         food_count++;
     }
     if (food_count < 1) {
-        external_error(std::string("Picture is missing from LGR file: qfood1.pcx ") + path);
+        internal_error(std::string("Picture is missing from LGR file: qfood1.pcx ") + path);
     }
 
     // Check grass
@@ -1063,8 +1084,8 @@ lgrfile::~lgrfile() {
         internal_error("lgrfile::~lgrfile !palette || !pal_data || !timer_palette_map!");
     }
     delete pal;
-    delete palette_data;
-    delete timer_palette_map;
+    delete[] palette_data;
+    delete[] timer_palette_map;
     pal = nullptr;
     palette_data = nullptr;
     timer_palette_map = nullptr;
@@ -1160,7 +1181,7 @@ void lgrfile::sanitize_default_texture_names(char* fg_name, char* bg_name) {
     }
 }
 
-void lgrfile::reload_default_textures(level& lev, bool force) {
+void lgrfile::reload_default_textures(level& lev, int width) {
     char level_foreground_name[10] = {};
     char level_background_name[10] = {};
     if (EolSettings->default_ground()) {
@@ -1176,7 +1197,8 @@ void lgrfile::reload_default_textures(level& lev, bool force) {
     sanitize_default_texture_names(level_foreground_name, level_background_name);
 
     // Recreate background texture
-    if (force || strcmpi(background_name, level_background_name) != 0) {
+    if (strcmpi(background_name, level_background_name) != 0 || !background ||
+        background->get_width() - background_original_width < width) {
         strcpy(background_name, level_background_name);
         delete background;
         background = nullptr;
@@ -1187,11 +1209,12 @@ void lgrfile::reload_default_textures(level& lev, bool force) {
         }
         texture* text = &textures[index];
         background_original_width = text->original_width;
-        background = generate_default_texture(text);
+        background = generate_default_texture(text, width);
     }
 
     // Recreate foreground texture
-    if (force || strcmpi(foreground_name, level_foreground_name) != 0) {
+    if (strcmpi(foreground_name, level_foreground_name) != 0 || !foreground ||
+        foreground->get_width() - foreground_original_width < width) {
         strcpy(foreground_name, level_foreground_name);
         delete foreground;
         foreground = nullptr;
@@ -1202,7 +1225,7 @@ void lgrfile::reload_default_textures(level& lev, bool force) {
         }
         texture* text = &textures[index];
         foreground_original_width = text->original_width;
-        foreground = generate_default_texture(text);
+        foreground = generate_default_texture(text, width);
     }
 }
 

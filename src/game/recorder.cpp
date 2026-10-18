@@ -125,16 +125,17 @@ bool recorder::recall_frame(motorst* mot, double time, bike_sound* sound) {
     index1 = std::max(index1, 0);
     index2 = std::max(index2, 0);
 
-    if (finished) {
-        sound->motor_frequency = 1.0;
-        sound->gas = 0;
-        sound->friction_volume = 0;
-        return false;
-    }
-
     if (index1 >= frame_count_ - 1) {
+        if (finished) {
+            sound->motor_frequency = 1.0;
+            sound->gas = 0;
+            sound->friction_volume = 0;
+            return false;
+        }
         index1 = frame_count_ - 1;
         finished = true;
+    } else {
+        finished = false;
     }
     index2 = std::min(index2, frame_count_ - 1);
 
@@ -416,10 +417,10 @@ int recorder::load(const char* filename, FILE* h, bool is_first_replay) {
         read_error(filename);
     }
     if (version < 131) {
-        external_error(std::string("Rec file version is too old!") + filename);
+        internal_error(std::string("Rec file version is too old!") + filename);
     }
     if (version > 131) {
-        external_error(std::string("Rec file version is too new!") + filename);
+        internal_error(std::string("Rec file version is too new!") + filename);
     }
 
     int multiplayer_rec = 0;
@@ -493,11 +494,7 @@ int recorder::load(const char* filename, FILE* h, bool is_first_replay) {
     return level_id;
 }
 
-[[noreturn]] static void save_error(const char* filename) {
-    internal_error(std::string("Failed to write rec file: ") + filename);
-}
-
-void recorder::save(const char* filename, FILE* h, int level_id) {
+void recorder::save(const char* filename, FILE* h, int level_id) const {
     bool keep_file = false;
     if (h) {
         keep_file = true;
@@ -516,62 +513,9 @@ void recorder::save(const char* filename, FILE* h, int level_id) {
         }
     }
 
-    if (fwrite(&frame_count_, 1, sizeof(frame_count_), h) != 4) {
-        save_error(filename);
-    }
-    int version = 131;
-    if (fwrite(&version, 1, sizeof(version), h) != 4) {
-        save_error(filename);
-    }
-    if (fwrite(&MultiplayerRec, 1, sizeof(MultiplayerRec), h) != 4) {
-        save_error(filename);
-    }
-    if (fwrite(&flagtag_, 1, sizeof(flagtag_), h) != 4) {
-        save_error(filename);
-    }
-    if (fwrite(&level_id, 1, sizeof(level_id), h) != 4) {
-        save_error(filename);
-    }
-    if (fwrite(level_filename, 1, sizeof(level_filename), h) != 16) {
-        save_error(filename);
-    }
-
-#define WRITE_FIELD(field)                                                                         \
-    {                                                                                              \
-        for (int i = 0; i < frame_count_; i++) {                                                   \
-            if (fwrite(&frames[i].field, 1, sizeof(frames[i].field), h) !=                         \
-                sizeof(frames[i].field)) {                                                         \
-                save_error(filename);                                                              \
-            }                                                                                      \
-        }                                                                                          \
-    }
-    WRITE_FIELD(bike_x);
-    WRITE_FIELD(bike_y);
-    WRITE_FIELD(left_wheel_x);
-    WRITE_FIELD(left_wheel_y);
-    WRITE_FIELD(right_wheel_x);
-    WRITE_FIELD(right_wheel_y);
-    WRITE_FIELD(body_x);
-    WRITE_FIELD(body_y);
-    WRITE_FIELD(bike_rotation);
-    WRITE_FIELD(left_wheel_rotation);
-    WRITE_FIELD(right_wheel_rotation);
-    WRITE_FIELD(flags);
-    WRITE_FIELD(motor_frequency);
-    WRITE_FIELD(friction_volume);
-#undef WRITE_FIELD
-
-    if (fwrite(&event_count, 1, 4, h) != 4) {
-        save_error(filename);
-    }
-    int event_length = event_count * sizeof(event);
-    if (fwrite(events.data(), 1, event_length, h) != event_length) {
-        save_error(filename);
-    }
-
-    int magic_number = MAGIC_NUMBER;
-    if (fwrite(&magic_number, 1, sizeof(magic_number), h) != 4) {
-        save_error(filename);
+    const std::vector<uint8_t> bytes = to_bytes(level_id);
+    if (fwrite(bytes.data(), 1, bytes.size(), h) != bytes.size()) {
+        internal_error(std::string("Failed to write rec file: ") + filename);
     }
 
     if (!keep_file) {
@@ -579,19 +523,71 @@ void recorder::save(const char* filename, FILE* h, int level_id) {
     }
 }
 
+std::vector<uint8_t> recorder::to_bytes(int level_id) const {
+    std::vector<uint8_t> bytes;
+    constexpr int REC_FIXED_SIZE = (5 * 4) + 16 + (2 * 4);
+    bytes.reserve(REC_FIXED_SIZE + (sizeof(frame_data) * frame_count_) +
+                  (event_count * sizeof(event)));
+
+    auto append = [&bytes](const void* data, size_t size) {
+        if (size == 0) {
+            return;
+        }
+        const auto* begin = static_cast<const uint8_t*>(data);
+        bytes.insert(bytes.end(), begin, begin + size);
+    };
+
+#define APPEND(field) append(&(field), sizeof(field))
+#define APPEND_FRAMES(field)                                                                       \
+    for (int i = 0; i < frame_count_; i++) {                                                       \
+        append(&frames[i].field, sizeof(frames[i].field));                                         \
+    }
+
+    APPEND(frame_count_);
+    const int version = 131;
+    APPEND(version);
+    APPEND(MultiplayerRec);
+    APPEND(flagtag_);
+    APPEND(level_id);
+    APPEND(level_filename);
+
+    APPEND_FRAMES(bike_x);
+    APPEND_FRAMES(bike_y);
+    APPEND_FRAMES(left_wheel_x);
+    APPEND_FRAMES(left_wheel_y);
+    APPEND_FRAMES(right_wheel_x);
+    APPEND_FRAMES(right_wheel_y);
+    APPEND_FRAMES(body_x);
+    APPEND_FRAMES(body_y);
+    APPEND_FRAMES(bike_rotation);
+    APPEND_FRAMES(left_wheel_rotation);
+    APPEND_FRAMES(right_wheel_rotation);
+    APPEND_FRAMES(flags);
+    APPEND_FRAMES(motor_frequency);
+    APPEND_FRAMES(friction_volume);
+
+    APPEND(event_count);
+    append(events.data(), event_count * sizeof(event));
+    const int magic_number = MAGIC_NUMBER;
+    APPEND(magic_number);
+    return bytes;
+#undef APPEND
+#undef APPEND_FRAMES
+}
+
 int recorder::load_rec_file(const char* filename, bool demo) {
     FILE* h = nullptr;
     if (demo) {
         h = qopen(filename, "rb");
         if (!h) {
-            external_error(std::string("Failed to open demo file: ") + filename);
+            internal_error(std::string("Failed to open demo file: ") + filename);
         }
     } else {
         recpath path;
         sprintf(path, "rec/%s", filename);
         h = fopen(path, "rb");
         if (!h) {
-            external_error(std::string("Failed to open rec file: ") + path);
+            internal_error(std::string("Failed to open rec file: ") + path);
         }
     }
 
@@ -614,7 +610,7 @@ recorder::merge_result recorder::load_merge(const std::string& filename1,
     std::string path = "rec/" + filename1;
     FILE* h1 = fopen(path.c_str(), "rb");
     if (!h1) {
-        external_error("Failed to open rec file: " + path);
+        internal_error("Failed to open rec file: " + path);
     }
     int level_id1 = Rec1->load(filename1.c_str(), h1, true);
     bool was_multi = MultiplayerRec != 0;
@@ -623,7 +619,7 @@ recorder::merge_result recorder::load_merge(const std::string& filename1,
     path = "rec/" + filename2;
     FILE* h2 = fopen(path.c_str(), "rb");
     if (!h2) {
-        external_error("Failed to open rec file: " + path);
+        internal_error("Failed to open rec file: " + path);
     }
     int level_id2 = Rec2->load(filename2.c_str(), h2, true);
     bool was_multi2 = MultiplayerRec != 0;
@@ -666,7 +662,7 @@ void recorder::save_rec_file(const char* filename, int level_id) {
         sprintf(path, "rec/%s", filename);
         FILE* h = fopen(path, "wb");
         if (!h) {
-            external_error(std::string("Failed to open rec file for writing!: ") + path);
+            internal_error(std::string("Failed to open rec file for writing!: ") + path);
         }
         Rec1->save(filename, h, level_id);
         Rec2->save(filename, h, level_id);

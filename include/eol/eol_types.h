@@ -6,7 +6,18 @@
 #include <cstdint>
 #include <optional>
 
-enum class TableType { None, PlayersOnline, BattleResults, BattleQueue, FinishedTimes };
+enum class TableType {
+    None,
+    PlayersOnline,
+    BattleResults,
+    BattleQueue,
+    FinishedTimes,
+    FinishedMultiTimes,
+    BestTimes,
+};
+
+// How a level is being shown to the kuski
+enum class EnterMode { Play, Spy, Replay, Editor };
 
 enum class BattleType : uint8_t {
     Normal = 0,

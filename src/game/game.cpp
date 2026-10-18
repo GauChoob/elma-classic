@@ -1,5 +1,7 @@
 #include "game/game.h"
+#include "editor/dialog.h"
 #include "editor/editor.h"
+#include "eol/checkpoint.h"
 #include "eol/console.h"
 #include "eol/eol.h"
 #include "eol/settings.h"
@@ -18,17 +20,21 @@
 #include "platform/implementation.h"
 #include "platform/scancode.h"
 #include "platform/sdl/keyboard.h"
+#include "renderer/canvas.h"
 #include "renderer/render.h"
 #include "renderer/timer.h"
 #include "sound/engine.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <format>
+#include <limits>
 #include <optional>
 #include <utility>
 
 int Single = 1;
 int FlagTag = 0;
+bool ExitHidden = false;
 bool OutOfBounds = false;
 
 bool ScreenshotRequested = false;
@@ -64,7 +70,7 @@ static void push_chat_prompt() {
     }
 }
 
-static void handle_pm_target_keys() {
+static void handle_chat_target_keys() {
     if (!Console->in_chat_mode() || Console->in_command_prompt()) {
         return;
     }
@@ -82,6 +88,11 @@ static void handle_pm_target_keys() {
 
     if (was_key_just_pressed(State->key_pm_clear_kuski)) {
         EolClient->clear_pm_kuski();
+        target_changed = true;
+    }
+
+    if (was_key_just_pressed(State->key_team_chat)) {
+        EolClient->toggle_team_chat();
         target_changed = true;
     }
 
@@ -137,7 +148,7 @@ static bool handle_console_input() {
         if (was_key_just_pressed(State->key_download_level)) {
             toggle_download_prompt();
         } else {
-            handle_pm_target_keys();
+            handle_chat_target_keys();
             Console->handle_input();
         }
     }
@@ -186,11 +197,6 @@ static void update_freecam(double dt, camera& current_camera) {
     current_camera.x = std::clamp(current_camera.x, current_camera.min_x, current_camera.max_x);
     current_camera.y = std::clamp(current_camera.y, current_camera.min_y, current_camera.max_y);
 }
-
-static hud_visibility HudGame1 = {true, true};
-static hud_visibility HudReplay1 = {false, true};
-static hud_visibility HudGame2 = {true, true};
-static hud_visibility HudReplay2 = {false, true};
 
 static void sound_init() {
     static bool SoundInitialized = false;
@@ -249,6 +255,9 @@ static void physics_subframe(driver& driv, double time, double dt) {
 
     using namespace BattleAttributes;
     const Kind cripples = active_cripples();
+    if (!(cripples & Drunk)) {
+        driv.stats.drunk = false;
+    }
     if ((cripples & Drunk) && ((mot->apple_count - mot->apple_bug_count) & 1)) {
         std::swap(is_gas_down, is_brake_down);
         std::swap(is_right_volt_down, is_left_volt_down);
@@ -262,6 +271,19 @@ static void physics_subframe(driver& driv, double time, double dt) {
     if (cripples & AlwaysThrottle) {
         is_gas_down = true;
         is_brake_down = false;
+    }
+
+    // Brake wins over gas, so gas held under brake is not throttling
+    const bool throttling = is_gas_down && !is_brake_down;
+    if (throttling) {
+        driv.stats.throttle_time += dt;
+    } else {
+        driv.stats.throttle_released = true;
+    }
+    if (is_brake_down) {
+        driv.stats.brake_time += dt;
+    } else {
+        driv.stats.brake_released = true;
     }
 
     bool right_volt = false;
@@ -278,6 +300,13 @@ static void physics_subframe(driver& driv, double time, double dt) {
             metadata->volt_time = time;
             metadata->volt_is_right = false;
             add_event_buffer(WavEvent::LeftVolt, 0.99, -1);
+        }
+        if (right_volt && left_volt) {
+            driv.stats.super_volt_count++;
+        } else if (right_volt) {
+            driv.stats.right_volt_count++;
+        } else if (left_volt) {
+            driv.stats.left_volt_count++;
         }
     }
 
@@ -366,11 +395,11 @@ static void update_view_settings(driver& driv, bool* other_draw_view) {
     }
 
     if (was_game_key_just_pressed(keys->toggle_minimap)) {
-        driv.hud->minimap = !driv.hud->minimap;
+        driv.toggle_minimap();
     }
 
     if (was_game_key_just_pressed(keys->toggle_timer)) {
-        driv.hud->timer = !driv.hud->timer;
+        driv.toggle_timer();
     }
 }
 
@@ -458,6 +487,7 @@ static void physics_frame_turn(driver& driv) {
             mot->flipped_bike = !mot->flipped_bike;
             set_head_position(mot);
             metadata->one_turn_used = true;
+            driv.stats.turn_count++;
         }
         metadata->turn_key_previous = is_turn_down;
     }
@@ -468,6 +498,10 @@ static void handle_eol_inputs() {
         EolSettings->set_show_others(!EolSettings->show_others());
         StatusMessages->add(EolSettings->show_others() ? "other players shown"
                                                        : "other players hidden");
+    }
+
+    if (was_game_key_just_pressed(State->key_shown_to)) {
+        EolClient->cycle_shown_to();
     }
 
     if (was_game_key_just_pressed(State->key_spy_next_kuski)) {
@@ -484,12 +518,17 @@ static void handle_eol_inputs() {
     if (was_game_key_just_pressed(State->key_download_battle_level)) {
         EolClient->download_battle_level();
     }
+
     if (was_game_key_just_pressed(State->key_download_level)) {
         toggle_download_prompt();
     }
 
     if (was_game_key_just_pressed(State->key_players_online)) {
         EolClient->set_table(TableType::PlayersOnline);
+    }
+
+    if (was_game_key_just_pressed(State->key_best_times)) {
+        EolClient->toggle_best_times();
     }
 
     if (was_game_key_just_pressed(State->key_battle_results)) {
@@ -518,6 +557,10 @@ static void handle_eol_inputs() {
                                                             : "speedometer hidden");
     }
 
+    if (was_game_key_just_pressed(State->key_download_battle_rec)) {
+        EolClient->download_battle_win_rec();
+    }
+
     if (was_game_key_just_pressed(State->key_show_chat)) {
         Console->cycle_show_chat();
     }
@@ -535,6 +578,12 @@ static void handle_eol_inputs() {
         EolSettings->set_play_offline(true);
         EolClient->disconnect();
         StatusMessages->add("disconnected from the server");
+    }
+
+    if (was_game_key_just_pressed(State->key_high_quality)) {
+        State->high_quality = !State->high_quality;
+        canvas::invalidate_canvases();
+        StatusMessages->add(std::format("Video Detail: {}", State->high_quality ? "High" : "Low"));
     }
 
     if (was_game_key_just_pressed(State->key_default_ground_sky)) {
@@ -561,6 +610,18 @@ static void handle_eol_inputs() {
         }
     }
 
+    if (was_game_key_just_pressed(State->key_zoom_out)) {
+        const double zoom = EolSettings->zoom() - 0.25;
+        EolSettings->set_zoom(zoom);
+        StatusMessages->add(std::format("Zoom: {:.2f}", EolSettings->zoom()));
+    }
+
+    if (was_game_key_just_pressed(State->key_zoom_in)) {
+        const double zoom = EolSettings->zoom() + 0.25;
+        EolSettings->set_zoom(zoom);
+        StatusMessages->add(std::format("Zoom: {:.2f}", EolSettings->zoom()));
+    }
+
     if (was_game_key_just_pressed(State->key_toggle_one_wheel_status)) {
         EolSettings->set_show_one_wheel_status(!EolSettings->show_one_wheel_status());
         StatusMessages->add(EolSettings->show_one_wheel_status() ? "one-wheel status shown"
@@ -574,8 +635,54 @@ static void handle_eol_inputs() {
     }
 }
 
+static void handle_mouse() {
+    game_mouse pos = get_mouse_position_game();
+    bool left_click = was_left_mouse_just_clicked();
+    bool right_click = was_right_mouse_just_clicked();
+
+    if (clickable::ClickMode == clickable::Mode::Normal && (left_click || right_click)) {
+        int dist = std::numeric_limits<int>::max();
+        clickable* closest = nullptr;
+        checkpoint::get_closest(pos, dist, closest);
+
+        if (closest) {
+            if (left_click) {
+                closest->left_clicked(pos);
+            } else {
+                closest->right_clicked(pos);
+            }
+            left_click = false;
+            right_click = false;
+        }
+    }
+
+    checkpoint::editor_update(pos, left_click, right_click);
+}
+
+void reload_graphic_assets() {
+    lgrfile::recreate_lgr_if_needed();
+    canvas::recreate_canvases_if_needed();
+}
+
+bool configure_game() {
+    bool map_viewer = false;
+    if (is_key_down(DIK_F1)) {
+        map_viewer = true;
+    }
+    if (is_key_down(DIK_F2)) {
+        map_viewer = true;
+        checkpoint::Editor = true;
+        StatusMessages->add("Checkpoint editor enabled: click to add checkpoints");
+    } else {
+        checkpoint::Editor = false;
+    }
+    return map_viewer;
+}
+
 // Common setup function
 static void setup_gameloop(const char* filename) {
+    reload_graphic_assets();
+
     load_best_time(filename, Single);
 
     init_physics_data();
@@ -611,12 +718,20 @@ struct NumpadNavGuard {
     NumpadNavGuard() { keyboard::set_numpad_nav(false); }
     ~NumpadNavGuard() { keyboard::set_numpad_nav(true); }
 };
+
+struct ScreensaverSuspend {
+    ScreensaverSuspend() { disable_screensaver(); }
+    ~ScreensaverSuspend() { enable_screensaver(); }
+};
 } // namespace
 
 int game_loop(const char* filename, CameraMode camera_mode) {
     // Bindings during gameplay must be honored by raw scancode: numpad-6
     // is right-volt, not "Right Arrow when NumLock is off".
     NumpadNavGuard numpad_nav_guard;
+
+    // Disable screensaver during gameplay.
+    ScreensaverSuspend screensaver_suspend;
 
     WhoDiedFirst = 0;
     Player1Finished = false;
@@ -633,24 +748,34 @@ int game_loop(const char* filename, CameraMode camera_mode) {
     double time = 0.0;
     reset_event_buffer();
 
+    EnterMode mode = EnterMode::Play;
+    if (InEditor) {
+        mode = EnterMode::Editor;
+    } else if (camera_mode == CameraMode::MapViewer) {
+        mode = EnterMode::Spy;
+    }
     if (Single) {
-        EolClient->enter_level(filename, Level, camera_mode == CameraMode::MapViewer);
+        EolClient->enter_level(filename, Level, mode);
     }
 
     BattleRunCripples.reset();
     if (Single && camera_mode != CameraMode::MapViewer) {
         BattleRunCripples = EolClient->battle_cripples();
     }
+    ExitHidden = (!Single && FlagTag) || EolClient->battle_hides_exit();
 
     pacer::reset();
 
-    driver driv1(Motor1, Rec1, &State->keys1, &HudGame1);
-    driver driv2(Motor2, Rec2, &State->keys2, &HudGame2);
+    driver driv1(Motor1, Rec1, &State->keys1, HudSlot::Game1);
+    driver driv2(Motor2, Rec2, &State->keys2, HudSlot::Game2);
+    driv1.stats.drunk = driv2.stats.drunk = active_cripples() & BattleAttributes::Drunk;
 
     camera current_camera;
     current_camera.mode = camera_mode;
     current_camera.x = Motor1->bike.r.x;
     current_camera.y = Motor1->bike.r.y;
+    current_camera.start_x = Motor1->bike.r.x;
+    current_camera.start_y = Motor1->bike.r.y;
 
     double level_min_y;
     double level_max_y;
@@ -694,7 +819,9 @@ int game_loop(const char* filename, CameraMode camera_mode) {
             while (pacer::subframe(&dt)) {
                 ran_subframes = true;
                 if (current_camera.mode == CameraMode::MapViewer) {
-                    update_freecam(dt, current_camera);
+                    if (!EolClient->spy_kuski()) {
+                        update_freecam(dt, current_camera);
+                    }
                     time += dt;
                     continue;
                 }
@@ -747,15 +874,14 @@ int game_loop(const char* filename, CameraMode camera_mode) {
                     stop_motor_sound(false);
                     Mute = true;
 
-                    if (Single) {
-                        EolClient->exit_level(filename, time * TIME_TO_CENTISECONDS,
-                                              Motor1->apple_count - Motor1->apple_bug_count,
-                                              TotalApples, !finish_time, false);
+                    Rec1->encode_frame_count();
+                    Rec2->encode_frame_count();
+                    if (Single && !InEditor) {
+                        EolClient->exit_level(driv1, Level, time * TIME_TO_CENTISECONDS,
+                                              TotalApples, camera_mode == CameraMode::MapViewer);
                     }
 
                     Level->unflip_objects();
-                    Rec1->encode_frame_count();
-                    Rec2->encode_frame_count();
                     if (finish_time) {
                         return finish_time;
                     }
@@ -803,6 +929,7 @@ int game_loop(const char* filename, CameraMode camera_mode) {
         if (!Single) {
             update_graphical_metadata(driv2, true, time);
         }
+        EolClient->update_spy_kuskis();
 
         // Update the hud and player visibility
         update_view_settings(driv1, &driv2.draw_view);
@@ -824,6 +951,7 @@ int game_loop(const char* filename, CameraMode camera_mode) {
         }
 
         handle_eol_inputs();
+        handle_mouse();
 
         if (!console_was_active &&
             (was_key_just_pressed(DIK_ESCAPE) || was_key_just_pressed(State->key_escape_alias))) {
@@ -836,10 +964,9 @@ int game_loop(const char* filename, CameraMode camera_mode) {
             Level->unflip_objects();
             Rec1->encode_frame_count();
             Rec2->encode_frame_count();
-            if (Single) {
-                EolClient->exit_level(filename, time * TIME_TO_CENTISECONDS,
-                                      Motor1->apple_count - Motor1->apple_bug_count, TotalApples,
-                                      false, true);
+            if (Single && !InEditor) {
+                EolClient->exit_level(driv1, Level, time * TIME_TO_CENTISECONDS, TotalApples,
+                                      camera_mode == CameraMode::MapViewer);
             }
             return -1;
         }
@@ -925,6 +1052,20 @@ static bool replay_frame(driver& driv, double time, bool* other_draw_view) {
     return alive;
 }
 
+static void sync_replay_death(driver& driv, bool finished, bool is_motor1) {
+    if (driv.dead == finished) {
+        return;
+    }
+
+    driv.dead = finished;
+
+    if (finished) {
+        stop_motor_sound(is_motor1);
+    } else {
+        start_motor_sound(is_motor1);
+    }
+}
+
 static bool PreviousReplayDrawView1 = true;
 static bool PreviousReplayDrawView2 = true;
 
@@ -932,6 +1073,9 @@ int replay_loop(const char* filename, bool restore_player_visibility) {
     // Bindings during gameplay must be honored by raw scancode: numpad-6
     // is right-volt, not "Right Arrow when NumLock is off".
     NumpadNavGuard numpad_nav_guard;
+
+    // Disable screensaver during gameplay.
+    ScreensaverSuspend screensaver_suspend;
 
     // Refuse to play zero-length replays (from map-viewer mode)
     if (Rec1->is_empty()) {
@@ -946,14 +1090,17 @@ int replay_loop(const char* filename, bool restore_player_visibility) {
 
     Single = !MultiplayerRec;
     FlagTag = Rec1->flagtag();
+    ExitHidden = !Single && FlagTag;
 
     setup_gameloop(filename);
 
     reset_event_buffer();
     stopwatch_reset();
 
-    driver driv1(Motor1, Rec1, &State->keys1, &HudReplay1);
-    driver driv2(Motor2, Rec2, &State->keys2, &HudReplay2);
+    EolClient->enter_level(filename, Level, EnterMode::Replay);
+
+    driver driv1(Motor1, Rec1, &State->keys1, HudSlot::Replay1);
+    driver driv2(Motor2, Rec2, &State->keys2, HudSlot::Replay2);
 
     driv2.draw_view = !MergedRec;
     if (restore_player_visibility) {
@@ -1059,14 +1206,8 @@ int replay_loop(const char* filename, bool restore_player_visibility) {
 
         // Death (or finish)
         if (!Single) {
-            if (!driv1.dead && finished1) {
-                stop_motor_sound(true);
-                driv1.dead = true;
-            }
-            if (!driv2.dead && finished2) {
-                stop_motor_sound(false);
-                driv2.dead = true;
-            }
+            sync_replay_death(driv1, finished1, true);
+            sync_replay_death(driv2, finished2, false);
 
             // Update flagtag time
             flagtag_replay(time);
@@ -1131,9 +1272,15 @@ void setup_render_directory(const std::string& replay_filename) {
 }
 
 void render_replay(const char* level_filename) {
+    // Disable screensaver during gameplay.
+    ScreensaverSuspend screensaver_suspend;
+
     Single = !MultiplayerRec;
     FlagTag = Rec1->flagtag();
+    ExitHidden = !Single && FlagTag;
     setup_gameloop(level_filename);
+
+    EolClient->enter_level(level_filename, Level, EnterMode::Replay);
 
     camera current_camera;
     current_camera.mode = CameraMode::Normal;
@@ -1141,8 +1288,8 @@ void render_replay(const char* level_filename) {
     VideoRecordingMode = true;
     VideoFrameIndex = 0;
 
-    driver driv1(Motor1, Rec1, &State->keys1, &HudReplay1);
-    driver driv2(Motor2, Rec2, &State->keys2, &HudReplay2);
+    driver driv1(Motor1, Rec1, &State->keys1, HudSlot::Replay1);
+    driver driv2(Motor2, Rec2, &State->keys2, HudSlot::Replay2);
 
     fps::reset();
     while (true) {

@@ -1,5 +1,5 @@
-#ifndef BALL_COLLISION_H
-#define BALL_COLLISION_H
+#ifndef MENU_BALL_COLLISION_H
+#define MENU_BALL_COLLISION_H
 
 struct ball;
 
@@ -17,7 +17,5 @@ double ball_wall_collision_time(ball* ball, WallId wall);
 void simulate_ball_wall_collision(ball* ball, WallId wall, double time);
 
 void clamp_ball_position(ball& ball);
-
-extern bool WallsDisabled;
 
 #endif

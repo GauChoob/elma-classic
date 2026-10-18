@@ -1,11 +1,11 @@
-#ifndef GAME_H
-#define GAME_H
+#ifndef GAME_GAME_H
+#define GAME_GAME_H
 
-#include "game/recorder.h"
 #include <string>
 
 extern int Single;
 extern int FlagTag;
+extern bool ExitHidden;
 extern bool OutOfBounds;
 
 extern bool ScreenshotRequested;
@@ -19,11 +19,17 @@ struct camera {
     CameraMode mode;
     double x;
     double y;
+    double start_x;
+    double start_y;
     double min_x;
     double min_y;
     double max_x;
     double max_y;
 };
+
+void reload_graphic_assets();
+
+bool configure_game();
 
 int game_loop(const char* filename, CameraMode camera_mode);
 int replay_loop(const char* filename, bool restore_player_visibility);
