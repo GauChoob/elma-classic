@@ -1,5 +1,5 @@
-#ifndef LGRFILE_H
-#define LGRFILE_H
+#ifndef PIC_LGR_H
+#define PIC_LGR_H
 
 #include "level/sprite.h"
 
@@ -84,7 +84,10 @@ class lgrfile {
     ~lgrfile();
 
   public:
-    static void load_lgr_file(const char* lgr_name);
+    static void invalidate_lgr_cache();
+    static void recreate_lgr_if_needed();
+    static void load_lgr_file(const char* lgr_name, bool warn_missing);
+    static const char* current_lgr_name();
 
     int picture_count;
     picture pictures[MAX_PICTURES];
@@ -122,7 +125,7 @@ class lgrfile {
     int foreground_original_width;
     char foreground_name[10];
     char background_name[10];
-    void reload_default_textures(level& lev, bool force);
+    void reload_default_textures(level& lev, int width);
 
     // From QCOLORS.pcx
     unsigned char minimap_foreground_palette_id;
@@ -141,9 +144,8 @@ class lgrfile {
 };
 
 extern lgrfile* Lgr;
-void invalidate_lgr_cache();
 
-void create_grass_mask(mask& msk, int* heightmap, int skip_rows);
+void create_grass_mask(mask& msk, const int* heightmap, int skip_rows);
 
 int read_varint(const unsigned char* buffer, int& offset);
 

@@ -1,4 +1,5 @@
 #include "eol/eol.h"
+#include "eol/settings.h"
 #include "eol/status_messages.h"
 #include "level/level.h"
 #include "level/object.h"
@@ -6,6 +7,7 @@
 #include "pic/abc8.h"
 #include "pic/pic8.h"
 #include "platform/implementation.h"
+#include "platform/utils.h"
 #include "util/util.h"
 #include <algorithm>
 #include <filesystem>
@@ -110,13 +112,11 @@ static std::string format_type_with_cripples(BattleType t, BattleAttributes::Kin
 }
 
 std::string eol::format_level(std::string_view level) {
-    std::string with_ext = std::format("{}.lev", level);
-    auto idx = get_internal_index(with_ext.c_str());
-
+    auto idx = get_internal_index(level);
     if (idx.has_value()) {
         return std::format("internal {:02}", *idx);
     }
-    return with_ext;
+    return std::format("{}.lev", level);
 }
 
 // First Finish battle results in Sju250.lev (apple bugs, see others)
@@ -163,10 +163,10 @@ bool eol::in_apple_battle() const {
 
 bool eol::kuski_has_flag(unsigned int kuski_id) const {
     return current_battle && current_battle->type == BattleType::FlagTag &&
-           current_battle->flag_owner_id == kuski_id && proto.playing_battle_level();
+           current_battle->flag_owner_id == kuski_id && proto.in_battle_level();
 }
 
-bool eol::own_bike_has_flag() const { return kuski_has_flag(id); }
+bool eol::own_bike_has_flag() const { return kuski_has_flag(id) && proto.playing_battle_level(); }
 
 // Battle types where finishing is impossible: the exit is hidden and untouchable.
 static bool battle_type_hides_exit(BattleType t) {
@@ -244,6 +244,8 @@ void eol::process(const battle_started& bs) {
     current_battle = bs.bat;
     current_battle->level_exists = std::filesystem::exists(
         std::format("lev/{}.lev", (const char*)current_battle->level_filename));
+    battle_pr.result.reset();
+    battle_pr.apple_count = 0;
     battle_leaderboard_.clear();
     battle_leaderboard_type_ = current_battle->type;
     online_apple_battle.clear();
@@ -299,8 +301,18 @@ void eol::toggle_show_battle_leader() const {
 }
 
 void eol::upsert_leaderboard_entry(const battle_leaderboard_entry& entry, uint16_t rank) {
+    // Reconnecting mid-battle assigns a new kuski id, so the stale line is only
+    // found by nick; multi lines may also arrive with the pair swapped.
+    auto nick_eq = [](const char* a, const char* b) { return a && b && strcmpi(a, b) == 0; };
+    const char* nick = find_nick(entry.kuski_id);
+    const char* nick2 = find_nick(entry.kuski_id2);
     std::erase_if(battle_leaderboard_, [&](const battle_leaderboard_entry& e) {
-        return e.kuski_id == entry.kuski_id && e.kuski_id2 == entry.kuski_id2;
+        const char* e_nick = find_nick(e.kuski_id);
+        const char* e_nick2 = find_nick(e.kuski_id2);
+        return ((e.kuski_id == entry.kuski_id || nick_eq(e_nick, nick)) &&
+                (e.kuski_id2 == entry.kuski_id2 || nick_eq(e_nick2, nick2))) ||
+               ((e.kuski_id == entry.kuski_id2 || nick_eq(e_nick, nick2)) &&
+                (e.kuski_id2 == entry.kuski_id || nick_eq(e_nick2, nick)));
     });
     size_t idx = std::min<size_t>(rank, battle_leaderboard_.size());
     battle_leaderboard_.insert(battle_leaderboard_.begin() + idx, entry);
@@ -479,4 +491,71 @@ void eol::sync_battle_queue_table() {
         battle_queue_table.add_row(
             {std::string(nick), format_battle_type(entry.battle_type), std::move(duration)});
     }
+}
+
+bool eol::update_battle_rec(const struct exit_level& el) {
+    if (proto.pending_battle_rec_battle_id()) {
+        return true;
+    }
+
+    if (!proto.in_battle_level() || !current_battle || current_battle->in_countdown) {
+        return false;
+    }
+
+    const driver& d = el.driv;
+
+    switch (current_battle->type) {
+    case BattleType::Normal:
+    case BattleType::FinishCount:
+    case BattleType::FirstFinish:
+    case BattleType::Slowness: {
+        const bool finished = d.finish_time != 0;
+        const int apple_count = d.mot->apple_count - d.mot->apple_bug_count;
+        const bool all_apples = el.level_apple_count == apple_count;
+        const bool accept_bugs = current_battle->attributes & BattleAttributes::AcceptBugs;
+        const bool better_result =
+            ((current_battle->type == BattleType::Normal ||
+              current_battle->type == BattleType::FinishCount) &&
+             el.time < battle_pr.result) ||
+            (current_battle->type == BattleType::Slowness && el.time > battle_pr.result);
+        if (finished && (all_apples || accept_bugs) && (!battle_pr.result || better_result)) {
+            battle_pr.result = el.time;
+            battle_pr.apple_count = apple_count;
+            return true;
+        }
+
+        if ((!finished || !all_apples) && !battle_pr.result &&
+            apple_count > battle_pr.apple_count) {
+            battle_pr.apple_count = apple_count;
+            return true;
+        }
+        break;
+    }
+    case BattleType::OneLife:
+        if (!battle_pr.result) {
+            battle_pr.result = el.time;
+            return true;
+        }
+        break;
+    case BattleType::LastCounts:
+        return true;
+    case BattleType::Survivor:
+        if (!battle_pr.result || el.time > battle_pr.result) {
+            battle_pr.result = el.time;
+            return true;
+        }
+        break;
+    case BattleType::Speed:
+        if (!battle_pr.result || d.stats.max_speed > battle_pr.result) {
+            battle_pr.result = d.stats.max_speed;
+            return true;
+        }
+        break;
+    case BattleType::HourTT:
+    case BattleType::FlagTag:
+    case BattleType::Apple:
+        break;
+    }
+
+    return false;
 }

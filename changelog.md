@@ -12,13 +12,14 @@
 * Steam elma.res and Steam LGR13 files are supported
 
 ## Major Bug Fixes
-* Rewinding in replays correctly shows arm position and restores apples
+* Rewinding replays now correctly reverses apples, arm animations and deaths
 * Wide grass polygons are properly rendered at high zoom (Uphill Battle grass bug)
 * Bike wheels no longer increase in size by 2.5% while turning
 * Wheels no longer spin the wrong way at max speed in replays - the wheel used to spin the wrong way at a speed of 124 (max gas speed is 220) - the glitch now only occurs above a speed of 455
 * Large masks and pictures no longer crash, especially at high zoom
 * Going out-of-bounds kills the player instead of crashing
 * More than 200 apples can be collected in one frame
+* Driving a top ten time no longer corrupts the level file if it was modified after loading
 
 ## Minor Features
 
@@ -30,6 +31,8 @@
 * Save play is enabled for internal level 55 (More Levels)
 * F6 table title now shows the battle attributes Allow starter, Others Shown and Apple Bugs
 * Speedometer works in 2-player mode
+* Timer and minimap default visibility for player A may be toggled via Options
+* The currently loaded external level is reloaded on enter if it was modified after loading
 
 ### Game Rendering
 * Bike turn time is configurable
@@ -40,9 +43,12 @@
 * Screenshots are timestamped and saved as .bmp in the screenshots/ subfolder
 * Significantly improved level and lgr loading speeds
 * Front grass in front of the bike is properly zoomed
+* Level filename may be shown while watching replays via Options
 
 ### Console and Shortcuts
 * Ctrl+G: toggle "ground"/"sky" foreground/background textures
+* Ctrl+H: toggle Video Detail (high quality textures)
+* !snapshot to save a .bmp of the entire level to the screenshots/ subfolder
 
 ### System
 * lev/ and rec/ folders no longer have a maximum file limit
@@ -67,6 +73,7 @@
 
 ### Errors
 * message.inf is no longer required to view error messages, and error messages are in English
+* All errors are displayed as internal errors
 * error.txt is replaced with eol.log
 * Error and warning messages are vertically centered on the screen
 
@@ -103,15 +110,16 @@
 * Bike and wheel rotation positions are no longer briefly incorrect when rotating through an angle of 0 degrees (upright position)
 
 ### System
+* The audio device is opened in the menu, instead of when entering a level for the first time and lagging the start of the level
 * Enforce lowercase LGR filenames to fix loading issues on case-sensitive filesystems
 * Level and replay filenames may have multiple dots (e.g. pack.01.lev)
-* When the replay Randomizer is unable to find a level file, pressing Esc goes back to the Replay menu instead of going to the Main Menu
 * Some minor grammatical and spelling mistakes are fixed
 * .lev and .rec files no longer leak old data
+* Replays no longer crash loading levels with topology errors
 
 ### Menu
-* Background balls no longer vanish at high resolution on the "Please do not distribute" screen
 * Red helmet animation is now smooth after the intro scrolling animation
+* Pressing Esc at the startup player creation/selection menu asks to quit instead of quitting immediately
 
 ### State
 * Disallow duplicate players with identical names
@@ -150,3 +158,4 @@
 * Disabled f_rate.inf (average run FPS)
 * Disabled debug function to generate desclist.txt
 * Disabled secret 1997 Action SuperCross watermark in Save Play
+* Disabled "Thank you for registering the game!" screen when quitting

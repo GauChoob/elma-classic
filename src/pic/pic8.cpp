@@ -5,8 +5,10 @@
 #include "platform/implementation.h"
 #include "platform/utils.h"
 #include <algorithm>
-#include <climits>
+#include <cmath>
 #include <cstring>
+#include <limits>
+#include <memory>
 
 void pic8::allocate(int w, int h) {
     if (rows || pixels) {
@@ -24,7 +26,7 @@ void pic8::allocate(int w, int h) {
     pixels = new unsigned char[w * h];
     rows = new unsigned char*[(unsigned int)(h)];
     if (!rows || !pixels) {
-        external_error("pic8::alloc memory!");
+        internal_error("pic8::alloc memory!");
     }
     memset(pixels, 0, sizeof(unsigned char) * w * h);
     // Map the pixel array to the array of rows
@@ -143,15 +145,21 @@ pic8* pic8::clone() {
     return copy;
 }
 
-bool pic8::save(const char* filename, unsigned char* pal, FILE* h) {
+void pic8::save(const char* filename, const unsigned char* pal, FILE* h) {
     int i = strlen(filename) - 1;
     while (i >= 0) {
         if (filename[i] == '.') {
             if (strcmpi(filename + i, ".spr") == 0) {
-                return spr_save(filename, h);
+                spr_save(filename, h);
+                return;
             }
             if (strcmpi(filename + i, ".pcx") == 0) {
-                return pcx_save(filename, pal);
+                pcx_save(filename, pal);
+                return;
+            }
+            if (strcmpi(filename + i, ".bmp") == 0) {
+                bmp_save(filename, pal);
+                return;
             }
             internal_error(std::string("pic8::save unknown file extension: ") + filename);
         }
@@ -291,10 +299,9 @@ void pic8::spr_open(const char* filename, FILE* h) {
     }
 }
 
-bool pic8::spr_save(const char* filename, FILE* h) {
-    if (width > SHRT_MAX || height > SHRT_MAX) {
-        external_error(std::string("Image is too large to be saved as .spr format!") + filename);
-        return false;
+void pic8::spr_save(const char* filename, FILE* h) {
+    if (width > std::numeric_limits<short>::max() || height > std::numeric_limits<short>::max()) {
+        internal_error(std::string("Image is too large to be saved as .spr format!") + filename);
     }
 
     bool h_provided = true;
@@ -321,7 +328,6 @@ bool pic8::spr_save(const char* filename, FILE* h) {
     if (!h_provided) {
         fclose(h);
     }
-    return true;
 }
 
 struct pcxdescriptor {
@@ -407,10 +413,9 @@ static int pcx_count_repeats(pic8* ppic, int x, int y, int width) {
 
 // Strictly respects pcx convention: Only compresses palette IDs 0-63 instead of 0-191
 // Does not enforce the width to be an even number however
-bool pic8::pcx_save(const char* filename, unsigned char* pal) {
+void pic8::pcx_save(const char* filename, const unsigned char* pal) {
     if (width > SHRT_MAX || height > SHRT_MAX) {
-        external_error(std::string("Image is too large to be saved as .pcx format!") + filename);
-        return false;
+        internal_error(std::string("Image is too large to be saved as .pcx format!") + filename);
     }
 
     FILE* h = fopen(filename, "wb");
@@ -498,7 +503,6 @@ bool pic8::pcx_save(const char* filename, unsigned char* pal) {
         }
     }
     fclose(h);
-    return true;
 }
 
 constexpr short BMP_MAGIC = 0x4D42;
@@ -527,18 +531,18 @@ struct bmp_header {
 static_assert(sizeof(bmp_header) == BMP_HEADER_SIZE);
 
 pic8* pic8::from_bmp(const char* filename) {
-    FILE* h = fopen(filename, "rb");
+    std::unique_ptr<FILE, decltype(&fclose)> h(fopen(filename, "rb"), fclose);
     if (!h) {
         return nullptr;
     }
 
     short magic;
-    if (fread(&magic, 1, sizeof(magic), h) != 2 || magic != BMP_MAGIC) {
+    if (fread(&magic, 1, sizeof(magic), h.get()) != 2 || magic != BMP_MAGIC) {
         return nullptr;
     }
 
     bmp_header header;
-    if (fread(&header, 1, sizeof(header), h) != BMP_HEADER_SIZE) {
+    if (fread(&header, 1, sizeof(header), h.get()) != BMP_HEADER_SIZE) {
         return nullptr;
     }
 
@@ -557,28 +561,97 @@ pic8* pic8::from_bmp(const char* filename) {
     int width = header.width;
     int height = header.height;
 
-    pic8* pic = new pic8(width, height);
-
     // BMP rows are padded.
     int padded_width = width;
     if (width % 4) {
         padded_width += 4 - width % 4;
     }
 
-    unsigned char* pixels = new unsigned char[padded_width * height];
-    fseek(h, header.offset, SEEK_SET);
-    if (fread(pixels, 1, padded_width * height, h) != padded_width * height) {
+    size_t pixels_size = padded_width * height;
+    auto pixels = std::make_unique<unsigned char[]>(pixels_size);
+    fseek(h.get(), header.offset, SEEK_SET);
+    if (fread(pixels.get(), 1, pixels_size, h.get()) != pixels_size) {
         return nullptr;
     }
 
-    for (int h = 0; h < height; h++) {
+    pic8* pic = new pic8(width, height);
+    for (int row = 0; row < height; row++) {
         // BMP rows are bottom up.
-        int src_row = height - 1 - h;
-        memcpy(pic->get_row(h), &pixels[src_row * padded_width], width);
+        int src_row = height - 1 - row;
+        memcpy(pic->get_row(row), pixels.get() + (src_row * padded_width), width);
     }
-    delete[] pixels;
 
     return pic;
+}
+
+void pic8::bmp_save(const char* filename, const unsigned char* pal) {
+    ELMA_ASSERT(pal);
+
+    FILE* h = fopen(filename, "wb");
+    if (!h) {
+        internal_error(std::string("bmp_save failed to open file: ") + filename);
+    }
+
+    const std::string error_message = std::string("bmp_save failed to write to file: ") + filename;
+    constexpr int color_table_size = 256 * 4;
+
+    int padding = 0;
+    int padded_width = width;
+    if (width % 4) {
+        padding = 4 - width % 4;
+        padded_width += padding;
+    }
+
+    // BITMAPFILEHEADER
+    constexpr short magic = BMP_MAGIC;
+    if (fwrite(&magic, sizeof(magic), 1, h) != 1) {
+        internal_error(error_message);
+    }
+    bmp_header header;
+    header.size = sizeof(magic) + BMP_HEADER_SIZE + color_table_size + padded_width * height;
+    header.reserved = 0;
+    header.offset = sizeof(magic) + BMP_HEADER_SIZE + color_table_size;
+
+    // BITMAPINFOHEADER
+    header.dib_size = BMP_HEADER_SIZE - offsetof(bmp_header, dib_size);
+    header.width = width;
+    header.height = height;
+    header.planes = 1;
+    header.bpp = 8;
+    header.compression = 0; // None
+    header.image_size = padded_width * height;
+    header.x_pixels_per_meter = 0;
+    header.y_pixels_per_meter = 0;
+    header.num_colors = 256;
+    header.num_important_colors = 0;
+    if (fwrite(&header, sizeof(header), 1, h) != 1) {
+        internal_error(error_message);
+    }
+
+    // Color Table (RGBQUAD[256])
+    unsigned char rgbquads[color_table_size];
+    for (int i = 0; i < 256; ++i) {
+        rgbquads[4 * i + 0] = pal[3 * i + 2];
+        rgbquads[4 * i + 1] = pal[3 * i + 1];
+        rgbquads[4 * i + 2] = pal[3 * i + 0];
+        rgbquads[4 * i + 3] = 0;
+    }
+    if (fwrite(rgbquads, color_table_size, 1, h) != 1) {
+        internal_error(error_message);
+    }
+
+    // Pixels, bottom-to-top
+    unsigned char padding_bytes[4] = {0, 0, 0, 0};
+    for (int i = height - 1; i >= 0; i--) {
+        if (fwrite(get_row(i), width, 1, h) != 1) {
+            internal_error(error_message);
+        }
+        if (fwrite(padding_bytes, 1, padding, h) != padding) {
+            internal_error(error_message);
+        }
+    }
+
+    fclose(h);
 }
 
 // Paste source (x1, y1, x2, y2) into dest at (x, y)
@@ -827,7 +900,6 @@ bool get_pcx_pal(const char* filename, palette** pal) {
     return true;
 }
 
-// Only horizontal and vertical lines can be drawn
 void pic8::line(int x1, int y1, int x2, int y2, unsigned char index) {
     if (x2 < x1) {
         int tmp = x1;
@@ -851,7 +923,98 @@ void pic8::line(int x1, int y1, int x2, int y2, unsigned char index) {
         }
         return;
     }
-    internal_error("pic8::line diagonal lines not implemented!");
+    line((double)x1, (double)y1, (double)x2, (double)y2, index);
+}
+
+void pic8::line(double x1, double y1, double x2, double y2, unsigned char index) {
+    double dx = x2 - x1;
+    double dy = y2 - y1;
+    if (dx == 0.0 && dy == 0.0) {
+        return;
+    }
+
+    // Always draw along the least-steep axis
+    bool invert_axes = false;
+    int major_axis_length = width;
+    int minor_axis_length = height;
+    if (std::abs(dy) > std::abs(dx)) {
+        invert_axes = true;
+        std::swap(dx, dy);
+        std::swap(x1, y1);
+        std::swap(x2, y2);
+        std::swap(major_axis_length, minor_axis_length);
+    }
+
+    // Always draw low-to-high
+    if (x1 > x2) {
+        std::swap(x1, x2);
+        std::swap(y1, y2);
+    }
+
+    // Derive equation y=slope*x + yintercept
+    double slope = dy / dx;
+    double intercept = y1 - slope * x1;
+
+    // Bound x within picture
+    int start = std::max(0, (int)std::round(x1));
+    int end = std::min(major_axis_length - 1, (int)std::round(x2));
+
+    if (slope == 0.0) {
+        // Draw straight line
+        int j = (int)std::round(intercept);
+        if (j < 0 || j >= minor_axis_length) {
+            // y is out of bounds; nothing to draw
+            return;
+        }
+        for (int i = start; i <= end; i++) {
+            if (invert_axes) {
+                rows[i][j] = index;
+            } else {
+                rows[j][i] = index;
+            }
+        }
+        return;
+    }
+
+    // Bound y within picture
+    double minor_intercept_0 = -intercept / slope;
+    double minor_intercept_height = ((minor_axis_length - 1) - intercept) / slope;
+    if (slope > 0.0) {
+        start = std::max(start, (int)std::ceil(minor_intercept_0));
+        end = std::min(end, (int)std::floor(minor_intercept_height));
+    } else {
+        start = std::max(start, (int)std::ceil(minor_intercept_height));
+        end = std::min(end, (int)std::floor(minor_intercept_0));
+    }
+
+    // Draw line
+    for (int i = start; i <= end; i++) {
+        int j = (int)std::round(slope * i + intercept);
+
+        if (i == start || i == end) {
+            if (j < 0 || j >= minor_axis_length) {
+                // Extra check for rounding errors at line extremes
+                continue;
+            }
+        }
+#ifdef DEBUG
+        ELMA_ASSERT(j >= 0 && j < minor_axis_length);
+#endif
+
+        if (invert_axes) {
+#ifdef DEBUG
+            ELMA_ASSERT(i >= 0 && i < height);
+            ELMA_ASSERT(j >= 0 && j < width);
+#endif
+            rows[i][j] = index;
+        } else {
+#ifdef DEBUG
+            ELMA_ASSERT(i >= 0 && i < width);
+            ELMA_ASSERT(j >= 0 && j < height);
+#endif
+            rows[j][i] = index;
+        }
+    }
 }
 
 void pic8::subview(int w, int h, unsigned char* source, int pitch, bool inverted) {
@@ -921,7 +1084,7 @@ void pic8::add_transparency(int transparency) {
     unsigned char* buffer = nullptr;
     buffer = new unsigned char[SPRITE_MAX_BUFFER];
     if (!buffer) {
-        external_error("add_transparency memory!");
+        internal_error("add_transparency memory!");
     }
 
     // Transparency data format:
@@ -953,7 +1116,7 @@ void pic8::add_transparency(int transparency) {
     // Copy data to new buffer of appropriate size
     transparency_data = new unsigned char[buffer_length];
     if (!transparency_data) {
-        external_error("add_transparency memory!");
+        internal_error("add_transparency memory!");
     }
     memcpy(transparency_data, buffer, buffer_length);
     transparency_data_length = buffer_length;

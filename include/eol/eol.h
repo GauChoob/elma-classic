@@ -1,10 +1,9 @@
-#ifndef EOL_H
-#define EOL_H
+#ifndef EOL_EOL_H
+#define EOL_EOL_H
 
 #include "eol/eol_events.h"
 #include "eol/eol_table.h"
 #include "eol/protocol.h"
-#include "eol/settings.h"
 #include <optional>
 #include <ranges>
 #include <string>
@@ -28,6 +27,10 @@ class eol {
     void tick() { proto.tick(); }
     void reset();
 
+    const char* short_nick() { return short_nick_; }
+
+    std::string battle_rec_name(std::string_view level_name, uint32_t battle_id);
+
     bool play_offline() const { return proto.play_offline(); }
 
     void process(const login&);
@@ -38,6 +41,7 @@ class eol {
     void process(const chat_message&);
     void process(const private_message&);
     void process(const team_message&);
+    void process(const info_message&);
     void process(const spy_data&);
     void process(const spy_apple_data&);
     void process(const stop_spy_data&);
@@ -50,14 +54,18 @@ class eol {
     void process(const flag_owner_changed&);
     void process(const battle_queue_update&);
     void process(const finished_time&);
+    void process(const best_times_update&);
     void process(const restore_apple_battle_progress&);
     void process(const level_download&);
+    void process(const battle_win_rec_download&);
 
     void download_level(std::string_view name);
     void download_battle_level();
-    void enter_level(const char* level_name, const level* lev, bool spying);
-    void exit_level(const char* level_name, double time, int apple_count, int level_apple_count,
-                    bool dead, bool esc);
+    void download_battle_win_rec() { proto.send(battle_win_rec_download_request{}); }
+
+    void enter_level(const char* level_name, const level* lev, EnterMode mode);
+    void exit_level(const driver& d, const level* lev, double time, int level_apple_count,
+                    bool spying);
     void send_chat(std::string_view message);
     void send_kuski_data(double time, driver& driv);
 
@@ -87,16 +95,19 @@ class eol {
 
     void toggle_battle_results() { set_table(TableType::BattleResults); }
     void toggle_battle_queue() { set_table(TableType::BattleQueue); }
-    void toggle_finished_times() { set_table(TableType::FinishedTimes); }
+    void toggle_finished_times() { set_table(finished_times_table_type()); }
     void cycle_finished_times_filter();
     void clear_finished_times();
+    void toggle_best_times() { set_table(TableType::BestTimes); }
 
     const kuski* spy_kuski();
-    bool is_spying() const { return spy_kuski_id.has_value(); }
     void spy_next_kuski();
     void spy_prev_kuski();
+    void update_spy_kuskis();
 
     void toggle_team_chat();
+    void cycle_shown_to();
+    void announce_shown_to();
 
     void pm_next_kuski();
     void pm_prev_kuski();
@@ -107,9 +118,12 @@ class eol {
     static pic8* load_shirt(std::string_view nick);
 
   private:
+    eol_table* table_for(TableType);
+    void select_table(TableType);
     void sync_players_online_table();
     void sync_battle_results_table();
     void sync_battle_queue_table();
+    bool in_finished_times_view(const finished_time&) const;
     void sync_finished_times_table();
 
     void set_battle_results_title(const char* label);
@@ -119,6 +133,7 @@ class eol {
     void record_apple_for_apple_battle(int object_index);
 
     const std::vector<kuski>& all_kuskis() const { return kuskis_; }
+    const char* find_nick(unsigned int kuski_id) const;
     std::string_view lookup_nick(unsigned int kuski_id) const;
     void send_chat_line(std::string_view message);
 
@@ -132,23 +147,35 @@ class eol {
     };
     void upsert_leaderboard_entry(const battle_leaderboard_entry& entry, uint16_t rank);
 
+    bool update_battle_rec(const struct exit_level& el);
+
     protocol proto;
     unsigned int id;
     unsigned int id2;
+    char short_nick_[4] = {};
     std::vector<kuski> kuskis_;
     std::optional<battle> current_battle;
+    struct {
+        std::optional<double> result;
+        uint32_t apple_count = 0;
+    } battle_pr;
     apple_battle_progress online_apple_battle;
     std::vector<battle_leaderboard_entry> battle_leaderboard_;
     BattleType battle_leaderboard_type_ = BattleType::Normal;
     std::vector<battle_queue_entry> battle_queue_;
-    enum class FinishedTimesFilter { All, Internal, External };
+    enum class FinishedTimesFilter { All, Internal, External, Multi };
     FinishedTimesFilter finished_times_filter_ = FinishedTimesFilter::All;
+    TableType finished_times_table_type() const {
+        return finished_times_filter_ == FinishedTimesFilter::Multi ? TableType::FinishedMultiTimes
+                                                                    : TableType::FinishedTimes;
+    }
     std::vector<finished_time> finished_times_;
     eol_table* cur_table;
     eol_table players_online_table;
     eol_table battle_results_table;
     eol_table battle_queue_table;
     eol_table finished_times_table;
+    eol_table best_times_table;
     std::optional<unsigned int> spy_kuski_id;
     int min_spy_frames = 3;
     bool is_team_chat = false;

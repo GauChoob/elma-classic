@@ -1,13 +1,52 @@
 #include "game/driver.h"
+#include "eol/settings.h"
 #include "physics/forces.h"
+#include "renderer/timer.h"
+#include <algorithm>
+#include <cstdint>
 #include <format>
 
 constexpr double PHYSICS_SPEED_TO_EOL_SPEED = 5.0;
 
 static std::string format_value(double value) { return std::format("{:.2f}", value); }
 
-std::string motor_stats::format_speed() const { return format_value(speed); }
-std::string motor_stats::format_max_speed() const { return format_value(max_speed); }
+std::string run_stats::format_speed() const { return format_value(speed); }
+std::string run_stats::format_max_speed() const { return format_value(max_speed); }
+
+namespace {
+
+// The shortest tap still counts as a centisecond
+uint32_t held_centiseconds(double held_time) {
+    if (held_time <= 0) {
+        return 0;
+    }
+
+    return std::max<uint32_t>(1, static_cast<uint32_t>(held_time * TIME_TO_CENTISECONDS));
+}
+
+// An input that was never let go is reported as the whole run.
+// Anything else stays strictly below the run time.
+uint32_t input_centiseconds(uint32_t held, bool released, uint32_t run_time) {
+    if (!released) {
+        return held > 0 ? run_time : 0;
+    }
+
+    if (run_time == 0) {
+        return 0;
+    }
+
+    return std::min(held, run_time - 1);
+}
+
+} // namespace
+
+uint32_t run_stats::throttle_centiseconds(uint32_t run_time) const {
+    return input_centiseconds(held_centiseconds(throttle_time), throttle_released, run_time);
+}
+
+uint32_t run_stats::brake_centiseconds(uint32_t run_time) const {
+    return input_centiseconds(held_centiseconds(brake_time), brake_released, run_time);
+}
 
 void driver::update_speed() {
     stats.speed = mot->bike.v.length() * PHYSICS_SPEED_TO_EOL_SPEED;
@@ -36,11 +75,75 @@ void driver::reset_metadata() {
     meta.camera_turning.turn_phase = 0.0;
 }
 
-driver::driver(motorst* mot, recorder* rec, player_keys* keys, hud_visibility* hud)
+driver::driver(motorst* mot, recorder* rec, player_keys* keys, HudSlot hud_slot)
     : mot(mot),
       rec(rec),
       keys(keys),
-      hud(hud) {
+      hud_slot(hud_slot) {
     reset_metadata();
     reset_motor_forces(mot);
+}
+
+bool driver::show_minimap() const {
+    switch (hud_slot) {
+    case HudSlot::Game1:
+        return EolSettings->show_minimap_player_a();
+    case HudSlot::Game2:
+        return EolSettings->show_minimap_player_b();
+    case HudSlot::Replay1:
+        return EolSettings->show_replay_minimap_player_a();
+    case HudSlot::Replay2:
+        return EolSettings->show_replay_minimap_player_b();
+    }
+    return false;
+}
+
+bool driver::show_timer() const {
+    switch (hud_slot) {
+    case HudSlot::Game1:
+        return EolSettings->show_timer_player_a();
+    case HudSlot::Game2:
+        return EolSettings->show_timer_player_b();
+    case HudSlot::Replay1:
+        return EolSettings->show_replay_timer_player_a();
+    case HudSlot::Replay2:
+        return EolSettings->show_replay_timer_player_b();
+    }
+    return false;
+}
+
+void driver::toggle_minimap() const {
+    bool show = !show_minimap();
+    switch (hud_slot) {
+    case HudSlot::Game1:
+        EolSettings->set_show_minimap_player_a(show);
+        return;
+    case HudSlot::Game2:
+        EolSettings->set_show_minimap_player_b(show);
+        return;
+    case HudSlot::Replay1:
+        EolSettings->set_show_replay_minimap_player_a(show);
+        return;
+    case HudSlot::Replay2:
+        EolSettings->set_show_replay_minimap_player_b(show);
+        return;
+    }
+}
+
+void driver::toggle_timer() const {
+    bool show = !show_timer();
+    switch (hud_slot) {
+    case HudSlot::Game1:
+        EolSettings->set_show_timer_player_a(show);
+        return;
+    case HudSlot::Game2:
+        EolSettings->set_show_timer_player_b(show);
+        return;
+    case HudSlot::Replay1:
+        EolSettings->set_show_replay_timer_player_a(show);
+        return;
+    case HudSlot::Replay2:
+        EolSettings->set_show_replay_timer_player_b(show);
+        return;
+    }
 }

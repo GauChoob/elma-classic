@@ -127,7 +127,10 @@ static void load_universal_controls(menu_nav* nav) {
     load_control(nav, UniversalKeys, "Dec. Screen Size", &State->key_decrease_screen_size);
     load_control(nav, UniversalKeys, "Make a Screenshot", &State->key_screenshot);
     load_control(nav, UniversalKeys, "Escape Alias", &State->key_escape_alias);
+    load_control(nav, UniversalKeys, "Toggle Video Detail", &State->key_high_quality);
     load_control(nav, UniversalKeys, "Toggle Ground/Sky", &State->key_default_ground_sky);
+    load_control(nav, UniversalKeys, "Zoom Out", &State->key_zoom_out);
+    load_control(nav, UniversalKeys, "Zoom In", &State->key_zoom_in);
 }
 
 // Setup the menu to display the replay controls
@@ -162,12 +165,14 @@ static void load_player_controls(menu_nav* nav, key_pointers& keys, player_keys*
 static void load_function_controls(menu_nav* nav) {
     FunctionKeys.resize(0);
     load_control(nav, FunctionKeys, "Show Others", &State->key_show_others);
+    load_control(nav, FunctionKeys, "Shown To", &State->key_shown_to);
     load_control(nav, FunctionKeys, "Spy Next Kuski", &State->key_spy_next_kuski);
     load_control(nav, FunctionKeys, "Spy Prev Kuski", &State->key_spy_prev_kuski);
     load_control(nav, FunctionKeys, "Battle Queue", &State->key_battle_queue);
     load_control(nav, FunctionKeys, "Download Battle Level", &State->key_download_battle_level);
     load_control(nav, FunctionKeys, "Download Level", &State->key_download_level);
     load_control(nav, FunctionKeys, "Players Online", &State->key_players_online);
+    load_control(nav, FunctionKeys, "Best Times", &State->key_best_times);
     load_control(nav, FunctionKeys, "Battle Results", &State->key_battle_results);
     load_control(nav, FunctionKeys, "Finished Times", &State->key_finished_times);
     load_control(nav, FunctionKeys, "Finished Times Filter",
@@ -182,6 +187,7 @@ static void load_function_controls(menu_nav* nav) {
     load_control(nav, FunctionKeys, "Hide Battle Status", &State->key_battle_status);
     load_control(nav, FunctionKeys, "Hide Battle Leader", &State->key_battle_leader);
     load_control(nav, FunctionKeys, "Show Speedometer", &State->key_speedometer);
+    load_control(nav, FunctionKeys, "Download Battle Rec", &State->key_download_battle_rec);
     load_control(nav, FunctionKeys, "Reconnect", &State->key_reconnect);
     load_control(nav, FunctionKeys, "Disconnect", &State->key_disconnect);
     load_control(nav, FunctionKeys, "Show Last Apple Time", &State->key_toggle_last_apple_time);

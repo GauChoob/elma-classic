@@ -2,11 +2,14 @@
 #define RENDERER_CANVAS_H
 
 #include "level/sprite.h"
-#include "main.h"
 #include "pic/lgr.h"
 #include "renderer/grass.h"
 #include "vect2.h"
 #include <cstdint>
+
+#ifdef DEBUG
+#include "main.h"
+#endif
 #include <vector>
 
 class canvas;
@@ -220,6 +223,8 @@ class canvas {
     bool bike_out_of_bounds(vect2 pos);
     // Generate all 3 canvasses required to render a level
     static void create_canvases();
+    static void invalidate_canvases();
+    static void recreate_canvases_if_needed();
 };
 
 extern canvas* CanvasBack;
