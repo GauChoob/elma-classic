@@ -131,9 +131,6 @@ jobs:
 
           echo "OPENSSL_ROOT_DIR=$OPENSSL_PREFIX" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$OPENSSL_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
-          echo "$OPENSSL_PREFIX/bin" >> "$GITHUB_PATH"
-
-          "$OPENSSL_PREFIX/bin/openssl" version
 
       - name: Visual Studio
         if: runner.os == 'windows'
