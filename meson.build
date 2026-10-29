@@ -109,6 +109,7 @@ if cpp.get_id() != 'emscripten'
 else
     elma_sources += files(
         'src/platform/emscripten/api/api.cpp',
+        'src/platform/emscripten/main.cpp',
     )
 endif
 
@@ -141,7 +142,7 @@ elif cpp.get_id() == 'clang'
     cpp_args += ['-Wno-deprecated-declarations', '-Wunreachable-code']
 elif cpp.get_id() == 'emscripten'
     cpp_args += ['-sUSE_SDL=2']
-    link_args += ['-sUSE_SDL=2', '-ooutput.html', '--emrun', '--embed-file','../data@/', '-sENVIRONMENT=web', '-sASYNCIFY', '-sDISABLE_EXCEPTION_CATCHING=0', '-sALLOW_MEMORY_GROWTH', '-sFETCH', '-sASYNCIFY_STACK_SIZE=16384']
+    link_args += ['-sUSE_SDL=2', '-ooutput.html', '--emrun', '--embed-file','../data@/', '-sENVIRONMENT=web', '-sDISABLE_EXCEPTION_CATCHING=0', '-sALLOW_MEMORY_GROWTH', '-sFETCH']
     if get_option('buildtype') == 'debug' or get_option('buildtype') == 'debugoptimized'
         cpp_args += ['-g']
         link_args += ['-sEXCEPTION_DEBUG', '-g']

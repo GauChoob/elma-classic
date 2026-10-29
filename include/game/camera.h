@@ -41,6 +41,7 @@ struct camera {
     view player2;
 
     camera(CameraMode mode, bool is_replay, state* stat);
+    camera() {};
     void update_freecam(double dt);
     void init_freecam(const level* lev, const motorst* mot);
     void update_view_settings(bool single);

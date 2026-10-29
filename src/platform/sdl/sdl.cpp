@@ -384,10 +384,6 @@ void palette::set() {
 }
 
 void handle_events() {
-#ifdef __EMSCRIPTEN__
-    emscripten_sleep(0);
-#endif
-
     keyboard::begin_frame();
     MouseWheelDelta = 0;
     LeftMouseDownPrevFrame = LeftMouseDown;

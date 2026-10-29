@@ -65,6 +65,7 @@ struct driver {
     bool one_frame_brake_pending = false;
 
     driver(motorst* mot, recorder* rec, player_keys* keys);
+    driver() {}
     void reset_metadata();
     void update_speed();
 };

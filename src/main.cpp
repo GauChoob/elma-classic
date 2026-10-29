@@ -53,6 +53,12 @@ int main() {
 
     eol_api::init();
 
+#ifdef __EMSCRIPTEN__
+    extern void main_emscripten();
+    main_emscripten();
+    return 0;
+#endif
+
     menu_intro();
 }
 
