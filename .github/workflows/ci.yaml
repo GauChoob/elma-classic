@@ -174,12 +174,14 @@ jobs:
         run: meson compile -C build
 
       - name: Upload build artifacts
-        if: ${{ !matrix.emscripten }}
         uses: actions/upload-artifact@v7
         with:
           name: elma-${{ runner.os }}-${{ matrix.arch || 'default' }}
           path: |
             build/elma
             build/elma.exe
+            build/output.html
+            build/output.js
+            build/output.wasm
           retention-days: 5
           if-no-files-found: ignore
