@@ -65,7 +65,7 @@ void init_qopen() {
 
     FILE* h = fopen(RES_FILENAME, "rb");
     if (!h) {
-        external_error(std::string("Missing file!: ") + RES_FILENAME);
+        internal_error(std::string("Missing file!: ") + RES_FILENAME);
     }
 
     // There are two different .res formats, with no explicit versioning.
@@ -88,7 +88,7 @@ void init_qopen() {
 
     ResFiles = new res_file[ResMaxFiles];
     if (!ResFiles) {
-        external_error("init_qopen() out of memory!");
+        internal_error("init_qopen() out of memory!");
     }
 
     int size = sizeof(res_file) * ResMaxFiles;
@@ -135,15 +135,15 @@ FILE* qopen(const char* filename, const char* mode) {
             }
         }
         internal_error(std::string("qopen() failed to find file: ") + filename);
-    } else {
-        NumHandles++;
-        char tmp[30] = "files/";
-        if (strlen(filename) > 12 || filename[0] == '.') {
-            internal_error(std::string("qopen() malformed filename!: ") + filename);
-        }
-        strcat(tmp, filename);
-        return fopen(tmp, mode);
     }
+
+    NumHandles++;
+    char tmp[30] = "files/";
+    if (strlen(filename) > 12 || filename[0] == '.') {
+        internal_error(std::string("qopen() malformed filename!: ") + filename);
+    }
+    strcat(tmp, filename);
+    return fopen(tmp, mode);
 }
 
 void qclose(FILE* h) {
@@ -166,10 +166,10 @@ void qclose(FILE* h) {
             }
         }
         internal_error("qclose() cannot find handle!");
-    } else {
-        NumHandles--;
-        fclose(h);
     }
+
+    NumHandles--;
+    fclose(h);
 }
 
 int qseek(FILE* h, int offset, int whence) {
@@ -192,7 +192,7 @@ int qseek(FILE* h, int offset, int whence) {
             }
         }
         internal_error("qseek() can't find handle!");
-    } else {
-        return fseek(h, offset, whence);
     }
+
+    return fseek(h, offset, whence);
 }

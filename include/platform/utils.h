@@ -2,9 +2,9 @@
 #define PLATFORM_UTILS_H
 
 #ifndef _WIN32
-#include <unistd.h>
+#include <unistd.h> // IWYU pragma: export
 #else
-#include <io.h>
+#include <io.h> // IWYU pragma: export
 #endif
 
 #ifdef _WIN32
@@ -12,7 +12,6 @@
 #define strcmpi _strcmpi
 #define strncmpi _strncmpi
 #define strlwr _strlwr
-#define access _access
 #endif
 
 #ifndef _WIN32
@@ -22,7 +21,11 @@ void itoa(int value, char* str, int base);
 int strcmpi(const char* a, const char* b);
 int strnicmp(const char* a, const char* b, size_t len);
 
+#ifndef __EMSCRIPTEN__
+
 void strlwr(char* str);
+
+#endif
 
 #endif
 

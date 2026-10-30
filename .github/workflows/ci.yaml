@@ -14,6 +14,10 @@ on:
       - "**/docs/**"
       - "**.txt"
 
+env:
+  EMSCRIPTEN_VERSION: 6.0.13
+  EMSCRIPTEN_CACHE: "emsdk-cache"
+
 jobs:
   clang-format:
     runs-on: ubuntu-26.04
@@ -66,31 +70,14 @@ jobs:
         run: meson setup build
 
       - name: Run clang-tidy
-        run: |
-          ninja -C build clang-tidy > clang-tidy-output.txt 2>&1 || true
-
-      - name: Show summary
-        run: |
-          echo "=== Clang-tidy Summary ==="
-          grep -E "warning:|error:" clang-tidy-output.txt 2>/dev/null || true
-          echo ""
-          echo "Total warnings: $(grep -c "warning:" clang-tidy-output.txt || true)"
-          echo "Total errors: $(grep -c "error:" clang-tidy-output.txt || true)"
-          echo ""
-          echo "Full output available in artifacts"
-
-          if grep -qE "warning:|error:" clang-tidy-output.txt; then
-            echo ""
-            echo "Clang-tidy found issues."
-            exit 1
-          fi
+        run: meson test -C build --suite clang-tidy --print-errorlogs
 
       - name: Upload clang-tidy results
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: clang-tidy-results
-          path: clang-tidy-output.txt
+          path: build/meson-logs/testlog.txt
           retention-days: 5
 
   build:
@@ -104,6 +91,10 @@ jobs:
           - os: macos-26
           - os: macos-15-intel
             arch: x86_64
+          - os: ubuntu-26.04
+            emscripten: true
+          - os: windows-2025
+            emscripten: true
 
     steps:
       - name: Checkout repository
@@ -112,14 +103,15 @@ jobs:
       - name: Cache Meson subprojects
         uses: actions/cache@v5
         with:
-          path: subprojects/packagecache
-          key: ${{ runner.os }}-${{ matrix.arch || 'default' }}-meson-${{ hashFiles('subprojects/*.wrap') }}
+          path: |
+            subprojects/packagecache
+          key: ${{ runner.os }}-${{ matrix.arch || 'default' }}${{ matrix.emscripten && '-emscripten' || '' }}-meson-${{ hashFiles('subprojects/*.wrap') }}
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2.22
         with:
           variant: sccache
-          key: ${{ runner.os }}-${{ matrix.arch || 'default' }}
+          key: ${{ runner.os }}-${{ matrix.arch || 'default' }}${{ matrix.emscripten && '-emscripten' || '' }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -141,19 +133,42 @@ jobs:
             libegl-dev libgbm-dev \
             libpulse-dev libasound2-dev libdbus-1-dev libudev-dev libibus-1.0-dev
 
+      - name: Configure system dependencies (macos-26)
+        if: matrix.os == 'macos-26'
+        run: |
+          # latest libcurl port to meson is curl-8.12.1
+          # curl-8.12.1 only supports openssl 3
+          # curl-8.20.0 supports openssl 4.0
+          # curl-8.23.0 supports openssl 4.1
+          # downgrade openssl from 4 to 3
+          OPENSSL_PREFIX="$(brew --prefix openssl@3)"
+          echo "PKG_CONFIG_PATH=$OPENSSL_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+
       - name: Visual Studio
-        if: runner.os == 'windows'
+        if: runner.os == 'windows' && !matrix.emscripten
         uses: microsoft/setup-msbuild@v3
         with:
           vs-version: "[17.1,19.0)"
 
-      - name: Configure
-        if: runner.os == 'windows'
-        run: meson setup build -Dbuildtype=release --vsenv
+      - name: Emscripten
+        uses: emscripten-core/setup-emsdk@v15
+        if: matrix.emscripten
+        with:
+          version: ${{env.EMSCRIPTEN_VERSION}}
+          actions-cache-folder: ${{env.EMSCRIPTEN_CACHE}}
 
       - name: Configure
-        if: runner.os != 'windows'
-        run: meson setup build -Dbuildtype=release -Dstatic_sdl=true
+        shell: bash
+        run: |
+          args=()
+          if [[ "${{ matrix.emscripten }}" == "true" ]]; then
+            args+=(--cross-file emscripten.ini)
+          elif [[ "${{ runner.os }}" == "windows" ]]; then
+            args+=(--vsenv)
+          else
+            args+=(-Dstatic_sdl=true)
+          fi
+          meson setup build -Dbuildtype=release "${args[@]}"
 
       - name: Build
         run: meson compile -C build
@@ -165,5 +180,8 @@ jobs:
           path: |
             build/elma
             build/elma.exe
+            build/output.html
+            build/output.js
+            build/output.wasm
           retention-days: 5
           if-no-files-found: ignore

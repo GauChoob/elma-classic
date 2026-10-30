@@ -13,8 +13,13 @@
 #include <SDL.h>
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <format>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 static SDL_Window* SDLWindow = nullptr;
 static SDL_Surface* SDLSurfaceMain = nullptr;
@@ -22,10 +27,12 @@ static SDL_Surface* SDLSurfacePaletted = nullptr;
 static palette* CurrentPalette = nullptr;
 
 static bool LeftMouseDown = false;
+static bool MiddleMouseDown = false;
 static bool RightMouseDown = false;
 
 // Per-frame mouse state for was_left/right_mouse_just_clicked()
 static bool LeftMouseDownPrevFrame = false;
+static bool MiddleMouseDownPrevFrame = false;
 static bool RightMouseDownPrevFrame = false;
 
 static int MouseWheelDelta = 0;
@@ -114,7 +121,7 @@ static void destroy_window() {
     }
 }
 
-static void create_window(int window_pos_x, int window_pos_y, int width, int height) {
+static bool create_window(int window_pos_x, int window_pos_y, int width, int height) {
     if (EolSettings->renderer() == RendererType::OpenGL) {
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
@@ -128,11 +135,10 @@ static void create_window(int window_pos_x, int window_pos_y, int width, int hei
         SDL_CreateWindow("Elasto Mania", window_pos_x, window_pos_y, width, height, window_flags);
     if (!SDLWindow) {
         internal_error(SDL_GetError());
-        return;
     }
 
     create_surfaces(width, height);
-    platform_apply_fullscreen_mode();
+    return platform_apply_fullscreen_mode();
 }
 
 bool is_fullscreen() {
@@ -149,10 +155,13 @@ void window_resize_event(int width, int height) {
     on_resolution_change();
 }
 
-void platform_apply_fullscreen_mode() {
+bool platform_apply_fullscreen_mode() {
     if (!SDLWindow) {
-        return;
+        return false;
     }
+
+    int width = SCREEN_WIDTH;
+    int height = SCREEN_HEIGHT;
 
     switch (EolSettings->fullscreen()) {
     case FullscreenMode::Windowed:
@@ -161,6 +170,9 @@ void platform_apply_fullscreen_mode() {
         SDL_SetWindowPosition(SDLWindow, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
         break;
     case FullscreenMode::Fullscreen: {
+        // Snap to the closest supported display mode if the current resolution
+        // doesn't match (e.g. stale settings from a different monitor, or an
+        // arbitrary windowed resolution).
         SDL_DisplayMode desired = {};
         desired.w = SCREEN_WIDTH;
         desired.h = SCREEN_HEIGHT;
@@ -170,34 +182,38 @@ void platform_apply_fullscreen_mode() {
             break;
         }
         SDL_SetWindowDisplayMode(SDLWindow, &closest);
-        // Snap to the closest supported display mode if the current resolution
-        // doesn't match (e.g. stale settings from a different monitor, or an
-        // arbitrary windowed resolution). This recurses through update_resolution
-        // → platform_resize_window, but terminates because the second call finds
-        // closest == SCREEN_WIDTH/HEIGHT.
         if (closest.w != SCREEN_WIDTH || closest.h != SCREEN_HEIGHT) {
-            update_resolution(closest.w, closest.h);
+            SDL_SetWindowSize(SDLWindow, closest.w, closest.h);
         }
         SDL_SetWindowFullscreen(SDLWindow, SDL_WINDOW_FULLSCREEN);
+        width = closest.w;
+        height = closest.h;
         break;
     }
-    case FullscreenMode::FullscreenDesktop: {
+    case FullscreenMode::FullscreenDesktop:
+        // The actual size can differ from the desktop display mode (e.g. macOS
+        // excludes the notch area) and is only known after entering fullscreen.
         SDL_SetWindowFullscreen(SDLWindow, SDL_WINDOW_FULLSCREEN_DESKTOP);
-        int w;
-        int h;
-        SDL_GetWindowSize(SDLWindow, &w, &h);
-        if (w != SCREEN_WIDTH || h != SCREEN_HEIGHT) {
-            update_resolution(w, h);
-        }
-
+        SDL_GetWindowSize(SDLWindow, &width, &height);
         break;
     }
+
+    if (width != SCREEN_WIDTH || height != SCREEN_HEIGHT) {
+        SCREEN_WIDTH = width;
+        SCREEN_HEIGHT = height;
+        EolSettings->persist_screen_width(width);
+        EolSettings->persist_screen_height(height);
+        setup_surfaces(width, height);
+        return true;
     }
 
     resize_renderer(SCREEN_WIDTH, SCREEN_HEIGHT);
+    return false;
 }
 
 void platform_init() {
+    SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1");
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         internal_error(SDL_GetError());
     }
@@ -295,7 +311,9 @@ void platform_recreate_window() {
     int y;
     SDL_GetWindowPosition(SDLWindow, &x, &y);
     destroy_window();
-    create_window(x, y, SCREEN_WIDTH, SCREEN_HEIGHT);
+    if (create_window(x, y, SCREEN_WIDTH, SCREEN_HEIGHT)) {
+        on_resolution_change();
+    }
 }
 
 bool has_window() { return SDLWindow != nullptr; }
@@ -366,9 +384,14 @@ void palette::set() {
 }
 
 void handle_events() {
+#ifdef __EMSCRIPTEN__
+    emscripten_sleep(0);
+#endif
+
     keyboard::begin_frame();
     MouseWheelDelta = 0;
     LeftMouseDownPrevFrame = LeftMouseDown;
+    MiddleMouseDownPrevFrame = MiddleMouseDown;
     RightMouseDownPrevFrame = RightMouseDown;
 
     SDL_Event event;
@@ -433,7 +456,16 @@ void handle_events() {
             break;
         case SDL_MOUSEBUTTONDOWN:
             if (event.button.button == SDL_BUTTON_LEFT) {
-                LeftMouseDown = true;
+                SDL_Keymod mod = SDL_GetModState();
+                if (mod & KMOD_CTRL) {
+                    // Ctrl+Click is middle click in case the user has no middle button
+                    MiddleMouseDown = true;
+                } else {
+                    LeftMouseDown = true;
+                }
+            }
+            if (event.button.button == SDL_BUTTON_MIDDLE) {
+                MiddleMouseDown = true;
             }
             if (event.button.button == SDL_BUTTON_RIGHT) {
                 RightMouseDown = true;
@@ -441,7 +473,14 @@ void handle_events() {
             break;
         case SDL_MOUSEBUTTONUP:
             if (event.button.button == SDL_BUTTON_LEFT) {
-                LeftMouseDown = false;
+                if (LeftMouseDown) {
+                    LeftMouseDown = false;
+                } else {
+                    MiddleMouseDown = false;
+                }
+            }
+            if (event.button.button == SDL_BUTTON_MIDDLE) {
+                MiddleMouseDown = false;
             }
             if (event.button.button == SDL_BUTTON_RIGHT) {
                 RightMouseDown = false;
@@ -474,6 +513,8 @@ void set_mouse_position(int x, int y) { SDL_WarpMouseInWindow(nullptr, x, y); }
 
 bool was_left_mouse_just_clicked() { return LeftMouseDown && !LeftMouseDownPrevFrame; }
 
+bool was_middle_mouse_just_clicked() { return MiddleMouseDown && !MiddleMouseDownPrevFrame; }
+
 bool was_right_mouse_just_clicked() { return RightMouseDown && !RightMouseDownPrevFrame; }
 
 std::string get_clipboard_text() {
@@ -489,22 +530,20 @@ std::string get_clipboard_text() {
 int get_mouse_wheel_delta() { return MouseWheelDelta; }
 
 static SDL_AudioDeviceID SDLAudioDevice;
-static bool SDLSoundInitialized = false;
 
 static void audio_callback(void* /*udata*/, Uint8* stream, int len) {
     sound_mixer((short*)stream, len / 2);
 }
 
-void init_sound() {
-    if (SDLSoundInitialized) {
-        internal_error("Sound already initialized!");
+void open_sound_device() {
+    if (SDLAudioDevice) {
+        internal_error("Sound device already open!");
     }
-    SDLSoundInitialized = true;
 
     SDL_AudioSpec desired_spec;
     memset(&desired_spec, 0, sizeof(desired_spec));
     desired_spec.callback = audio_callback;
-    desired_spec.freq = 11025;
+    desired_spec.freq = SOUND_SAMPLE_RATE;
     desired_spec.channels = 1;
     desired_spec.samples = 512;
     desired_spec.format = AUDIO_S16LSB;
@@ -523,6 +562,15 @@ void init_sound() {
     SDL_PauseAudioDevice(SDLAudioDevice, 0);
 }
 
+void close_sound_device() {
+    if (!SDLAudioDevice) {
+        return;
+    }
+    SDL_CloseAudioDevice(SDLAudioDevice);
+    SDLAudioDevice = 0;
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
+}
+
 bool platform_save_screenshot() {
     if (!SDLSurfacePaletted) {
         return false;
@@ -536,3 +584,7 @@ bool platform_save_screenshot() {
 
     return SDL_SaveBMP(SDLSurfacePaletted, filename.c_str()) == 0;
 }
+
+void enable_screensaver() { SDL_EnableScreenSaver(); }
+
+void disable_screensaver() { SDL_DisableScreenSaver(); }

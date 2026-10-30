@@ -1,13 +1,17 @@
-#ifndef EOL_EVENTS_H
-#define EOL_EVENTS_H
+#ifndef EOL_EOL_EVENTS_H
+#define EOL_EOL_EVENTS_H
 
 #include "eol/eol_types.h"
 #include "eol/kuski.h"
 #include "main.h"
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
+
+class recorder;
+struct driver;
 
 constexpr int MAX_MESSAGE_LEN = 65;
 
@@ -29,6 +33,7 @@ struct kuski_logout {
 struct kuski_set_level {
     unsigned int id;
     char level[MAX_FILENAME_LEN + 1];
+    bool multi;
 };
 
 struct kuski_new_shirt {
@@ -54,19 +59,30 @@ struct level_download {
     DownloadResult result;
 };
 
+struct battle_win_rec_download_request {};
+
+struct battle_win_rec_download {
+    char rec[MAX_REPLAY_NAME_LEN + 1];
+    std::span<const uint8_t> data;
+    DownloadResult result;
+};
+
 struct enter_level {
     const level* lev;
     const char* name;
-    bool spying;
+    EnterMode mode;
 };
 
 struct exit_level {
-    const char* name;
+    const driver& driv;
     double time;
-    int apple_count;
     int level_apple_count;
-    bool dead;
-    bool esc;
+};
+
+struct upload_rec {
+    const level* lev;
+    const char* name;
+    recorder* rec;
 };
 
 struct spy_apple_data {
@@ -104,6 +120,12 @@ struct show_table {
     TableType table;
 };
 
+enum class ShownTo : uint8_t { Everyone = 0, Team, Nobody };
+
+struct shown_to {
+    ShownTo to;
+};
+
 struct chat_message {
     unsigned int kuski_id;
     uint64_t unix_timestamp;
@@ -133,6 +155,10 @@ struct team_message {
     unsigned int from_kuski_id;
     uint64_t unix_timestamp;
     char message[MAX_MESSAGE_LEN + 1];
+};
+
+struct info_message {
+    std::string message;
 };
 
 struct battle_started {
@@ -173,8 +199,24 @@ struct battle_queue_update {
 
 struct finished_time {
     unsigned int kuski_id;
+    unsigned int kuski_id2; // 0 when the finish was single-player
     char level[MAX_FILENAME_LEN + 1];
     uint32_t time; // In centiseconds
+};
+
+struct best_times_entry {
+    std::string nick;
+    int32_t time; // In centiseconds, 0 on levels with hidden times
+    bool is_bug;
+    std::string legacy_label; // Empty for EOL times
+};
+
+struct best_times_update {
+    bool has_accept_bugs;
+    // When set, the last entry is our own PR, ranked kuski_pr_position.
+    bool kuski_pr_separately;
+    uint32_t kuski_pr_position;
+    std::vector<best_times_entry> entries;
 };
 
 #endif
