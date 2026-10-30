@@ -55,18 +55,24 @@ eol::eol()
       players_online_table("Players online"),
       battle_results_table("Battle results"),
       battle_queue_table("Battle queue"),
-      finished_times_table("Finished times") {
+      finished_times_table("Finished times"),
+      best_times_table("Best times") {
     players_online_table.add_column(100, eol_table::Align::Left);
     players_online_table.add_column(100, eol_table::Align::Right);
     battle_results_table.add_column(100, eol_table::Align::Left);
     battle_results_table.add_column(100, eol_table::Align::Right);
-    battle_queue_table.add_column(100, eol_table::Align::Left);
-    battle_queue_table.add_column(60, eol_table::Align::Right);
-    battle_queue_table.add_column(130, eol_table::Align::Right);
-    finished_times_table.add_column(100, eol_table::Align::Left);
-    finished_times_table.add_column(60, eol_table::Align::Right);
-    finished_times_table.add_column(130, eol_table::Align::Right);
+    battle_queue_table.add_column(80, eol_table::Align::Left);
+    battle_queue_table.add_column(160, eol_table::Align::Center);
+    battle_queue_table.add_column(80, eol_table::Align::Right);
+    finished_times_table.add_column(130, eol_table::Align::Left);
+    finished_times_table.add_column(160, eol_table::Align::Center);
+    finished_times_table.add_column(80, eol_table::Align::Right);
     finished_times_table.set_overflow(eol_table::Overflow::NewestRows);
+    best_times_table.add_column(100, eol_table::Align::Left);
+    best_times_table.add_column(100, eol_table::Align::Right);
+    // Zero width so legacy source labels hang off the right edge, keeping
+    // rank/nick/time centered under the title.
+    best_times_table.add_column(0, eol_table::Align::Left);
 }
 
 void eol::reset() {
@@ -80,6 +86,23 @@ void eol::reset() {
     spy_kuski_id.reset();
 }
 
+static void set_short_nick(const std::string& nick, char* short_nick) {
+    size_t j = 0;
+    for (char c : nick) {
+        if (std::isalnum(static_cast<unsigned char>(c))) {
+            short_nick[j++] = c;
+            short_nick[j] = 0;
+            if (j == 3) {
+                break;
+            }
+        }
+    }
+}
+
+std::string eol::battle_rec_name(std::string_view level_name, uint32_t battle_id) {
+    return std::format("{}_{:03d}{}.rec", level_name, battle_id % 1000, short_nick_);
+}
+
 void eol::process(const login& l) {
     if (l.success) {
         if (id != l.id || id2 != l.id2) {
@@ -89,7 +112,9 @@ void eol::process(const login& l) {
 
             kuski self{};
             self.id = id;
-            strncpy(self.nick, EolSettings->nick().c_str(), sizeof(self.nick) - 1);
+            std::string nick = EolSettings->nick();
+            set_short_nick(nick, short_nick_);
+            strncpy(self.nick, nick.c_str(), sizeof(self.nick) - 1);
             self.is_player = true;
             self.is_online = true;
             process(new_kuski{self});
@@ -144,9 +169,19 @@ void eol::process(const kuski_logout& kl) {
         }
     }
 
+    if (spy_kuski_id && (*spy_kuski_id == kl.id || *spy_kuski_id == kl.id2)) {
+        StatusMessages->add(
+            std::format("{} logged out, cancelling spy", lookup_nick(*spy_kuski_id)));
+        spy_kuski_id.reset();
+    }
+
     for (kuski& k : kuskis_) {
         if (k.id == kl.id || k.id == kl.id2) {
             k.is_online = false;
+            k.clear_spy_data();
+            if (spy_kuski_id && *spy_kuski_id == k.id) {
+                spy_kuski_id.reset();
+            }
         }
     }
     sync_players_online_table();
@@ -159,6 +194,7 @@ void eol::process(const kuski_set_level& l) {
     }
 
     strncpy(k->level, (const char*)l.level, MAX_FILENAME_LEN);
+    k->multi = l.multi;
     sync_players_online_table();
 }
 
@@ -193,19 +229,28 @@ void eol::sync_players_online_table() {
     // "players online" table is ordered by login time, so sort by id
     std::ranges::sort(by_id, {}, &kuski::id);
     for (const kuski* k : by_id) {
-        players_online_table.add_row({k->nick, strlen(k->level) > 0 ? format_level(k->level) : ""});
+        players_online_table.add_row({std::format("{}{}", k->nick, k->multi ? " (M)" : ""),
+                                      strlen(k->level) > 0 ? format_level(k->level) : ""});
     }
 }
 
-std::string_view eol::lookup_nick(unsigned int kuski_id) const {
+const char* eol::find_nick(unsigned int kuski_id) const {
     auto match = std::ranges::find(all_kuskis(), kuski_id, &kuski::id);
-    return match != all_kuskis().end() ? std::string_view{match->nick} : "?";
+    return match != all_kuskis().end() ? match->nick : nullptr;
+}
+
+std::string_view eol::lookup_nick(unsigned int kuski_id) const {
+    const char* nick = find_nick(kuski_id);
+    return nick ? nick : "?";
 }
 
 void eol::process(const finished_time& ft) {
     constexpr size_t MAX_FINISHED_TIMES = 500;
 
     if (!get_kuski(kuskis_, ft.kuski_id)) {
+        return;
+    }
+    if (ft.kuski_id2 != 0 && !get_kuski(kuskis_, ft.kuski_id2)) {
         return;
     }
 
@@ -216,20 +261,35 @@ void eol::process(const finished_time& ft) {
     sync_finished_times_table();
 }
 
+bool eol::in_finished_times_view(const finished_time& ft) const {
+    bool multi_finish = ft.kuski_id2 != 0;
+    switch (finished_times_filter_) {
+    case FinishedTimesFilter::All:
+        return !multi_finish;
+    case FinishedTimesFilter::Internal:
+        return !multi_finish && get_internal_index(ft.level).has_value();
+    case FinishedTimesFilter::External:
+        return !multi_finish && !get_internal_index(ft.level).has_value();
+    case FinishedTimesFilter::Multi:
+        return multi_finish;
+    }
+    return false;
+}
+
 void eol::sync_finished_times_table() {
     finished_times_table.clear_rows();
     for (const finished_time& ft : finished_times_) {
-        if (finished_times_filter_ != FinishedTimesFilter::All) {
-            bool internal = get_internal_index(std::format("{}.lev", ft.level).c_str()).has_value();
-            if (internal != (finished_times_filter_ == FinishedTimesFilter::Internal)) {
-                continue;
-            }
+        if (!in_finished_times_view(ft)) {
+            continue;
         }
 
+        std::string nick(lookup_nick(ft.kuski_id));
+        if (ft.kuski_id2 != 0) {
+            nick += std::format(" & {}", lookup_nick(ft.kuski_id2));
+        }
         char time_buf[32] = "";
         util::text::centiseconds_to_string(int(ft.time), time_buf, true, true);
-        finished_times_table.add_row(
-            {std::string(lookup_nick(ft.kuski_id)), format_level(ft.level), time_buf});
+        finished_times_table.add_row({nick, format_level(ft.level), time_buf});
     }
 }
 
@@ -248,10 +308,17 @@ void eol::cycle_finished_times_filter() {
         finished_times_table.set_title("Finished external times");
         break;
     case FinishedTimesFilter::External:
+        finished_times_filter_ = FinishedTimesFilter::Multi;
+        finished_times_table.set_title("Finished multi times");
+        finished_times_table.set_column_width(0, 130);
+        break;
+    case FinishedTimesFilter::Multi:
         finished_times_filter_ = FinishedTimesFilter::All;
         finished_times_table.set_title("Finished times");
+        finished_times_table.set_column_width(0, 80);
         break;
     }
+    select_table(finished_times_table_type());
     sync_finished_times_table();
 }
 
@@ -262,6 +329,56 @@ void eol::clear_finished_times() {
 
     finished_times_.clear();
     sync_finished_times_table();
+}
+
+void eol::process(const best_times_update& bt) {
+    best_times_table.set_title(bt.has_accept_bugs ? "Best times (Apple bugs allowed)"
+                                                  : "Best times");
+    best_times_table.clear_rows();
+
+    if (bt.entries.empty()) {
+        return;
+    }
+
+    size_t rank_width = 2;
+
+    // A multi-digit PR position widens the rank column of every row so the dots line up.
+    if (bt.kuski_pr_separately) {
+        rank_width = std::max<size_t>(2, std::to_string(bt.kuski_pr_position).size());
+    }
+
+    auto add_entry = [&](const best_times_entry& e, uint32_t rank) {
+        char time_buf[32] = "";
+        if (e.time <= 0) {
+            // Levels with hidden times but visible positions
+            // report 0 for everyone but yourself.
+            strcpy(time_buf, "hidden");
+        } else {
+            util::text::centiseconds_to_string(e.time, time_buf, true, true);
+        }
+
+        std::string flags;
+        if (!e.legacy_label.empty() || e.is_bug) {
+            flags = std::format(" {}{}{}", e.legacy_label, e.legacy_label.empty() ? "" : " ",
+                                e.is_bug ? "(bug)" : "");
+        }
+
+        best_times_table.add_row(
+            {std::format("{:>{}}. {}", rank, rank_width, e.nick), time_buf, std::move(flags)});
+    };
+
+    size_t top_count = bt.entries.size() - (bt.kuski_pr_separately ? 1 : 0);
+    for (size_t i = 0; i < top_count; i++) {
+        add_entry(bt.entries[i], i + 1);
+    }
+
+    // Kuskis own PR when outside the list, behind a "..." separator if there is a gap.
+    if (bt.kuski_pr_separately) {
+        if (bt.kuski_pr_position > bt.entries.size()) {
+            best_times_table.add_row({std::format("{:>{}}", "...", rank_width + 1), "", ""});
+        }
+        add_entry(bt.entries.back(), bt.kuski_pr_position);
+    }
 }
 
 void eol::process(const chat_message& msg) {
@@ -289,10 +406,12 @@ void eol::process(const team_message& msg) {
     Console->add_line(line, console::LineType::Team);
 }
 
+void eol::process(const info_message& msg) { StatusMessages->add(msg.message); }
+
 void eol::process(const spy_data& sd) {
     kuski* k = get_kuski(kuskis_, sd.kuski_id);
     if (k) {
-        k->add_spy_data(sd);
+        k->add_spy_data(sd, min_spy_frames);
     }
 }
 
@@ -316,7 +435,7 @@ void eol::process(const spy_apple_data& sd) {
 void eol::process(const stop_spy_data& sd) {
     kuski* k = get_kuski(kuskis_, sd.kuski_id);
     if (k) {
-        k->clear_spy_data();
+        k->stop_spy_data();
     }
 }
 
@@ -351,6 +470,37 @@ void eol::process(const level_download& ld) {
     }
 }
 
+void eol::process(const battle_win_rec_download& rd) {
+    const char* rec_name = (const char*)rd.rec;
+    switch (rd.result) {
+    case DownloadResult::Success: {
+        for (char c : rd.rec) {
+            if (c && !util::text::is_filename_char(c)) {
+                StatusMessages->add(
+                    std::format("error: rec {}.rec has invalid characters", rec_name));
+                return;
+            }
+        }
+        std::string path = std::format("rec/{}.rec", rec_name);
+        std::ofstream file(path, std::ios::binary);
+        if (file) {
+            file.write((const char*)rd.data.data(), rd.data.size());
+            StatusMessages->add(std::format("replay {}.rec downloaded", rec_name));
+        } else {
+            StatusMessages->add(std::format("error: failed to write {}.rec", rec_name));
+        }
+        break;
+    }
+    case DownloadResult::Fail:
+        StatusMessages->add(std::format("error: rec {}.rec failed download", rec_name));
+        break;
+    case DownloadResult::NotFound:
+        /* unreachable for battle win rec */
+        LOG_ERROR("battle win rec not found!");
+        break;
+    }
+}
+
 void eol::download_level(std::string_view name) {
     level_download_request req{};
     int size = std::min(name.size(), sizeof(req.level) - 1);
@@ -374,11 +524,11 @@ void eol::download_battle_level() {
     current_battle->download_requested = true;
 }
 
-void eol::enter_level(const char* level_name, const level* lev, bool spying) {
-    struct enter_level el{.lev = lev, .name = level_name, .spying = spying};
+void eol::enter_level(const char* level_name, const level* lev, EnterMode mode) {
+    struct enter_level el{.lev = lev, .name = level_name, .mode = mode};
     proto.send(el);
 
-    if (in_apple_battle()) {
+    if ((mode == EnterMode::Play || mode == EnterMode::Spy) && in_apple_battle()) {
         online_apple_battle.apply(*lev);
     }
 }
@@ -397,21 +547,35 @@ void eol::record_apple_taken(int object_index, int num_apples) {
     });
 }
 
-void eol::exit_level(const char* level_name, double time, int apple_count, int level_apple_count,
-                     bool dead, bool esc) {
+void eol::exit_level(const driver& d, const level* lev, double time, int level_apple_count,
+                     bool spying) {
     for (kuski& k : kuskis_) {
         k.clear_spy_data();
         k.clear_apple_data();
     }
 
     spy_kuski_id.reset();
-    struct exit_level fl{.name = level_name,
-                         .time = time,
-                         .apple_count = apple_count,
-                         .level_apple_count = level_apple_count,
-                         .dead = dead,
-                         .esc = esc};
+    struct exit_level fl{.driv = d, .time = time, .level_apple_count = level_apple_count};
     proto.send(fl);
+
+    if (!spying && update_battle_rec(fl)) {
+        std::string_view view;
+        uint32_t battle_id = proto.pending_battle_rec_battle_id();
+        if (battle_id) {
+            view = proto.pending_battle_rec_level();
+        } else {
+            view = d.rec->level_filename;
+            view.remove_suffix(strlen(".lev"));
+            battle_id = proto.battle_id();
+        }
+        std::string rec_name = battle_rec_name(view, battle_id);
+        recorder::save_rec_file(rec_name.c_str(), lev->level_id);
+    }
+
+    if (!spying) {
+        struct upload_rec ur{.lev = lev, .name = d.rec->level_filename, .rec = d.rec};
+        proto.send(ur);
+    }
 }
 
 void eol::send_chat(std::string_view message) {
@@ -456,34 +620,32 @@ void eol::send_kuski_data(double time, driver& d) {
     proto.send(data);
 }
 
-void eol::set_table(TableType table) {
-    eol_table* new_table = nullptr;
+eol_table* eol::table_for(TableType table) {
     switch (table) {
     case TableType::None:
-        cur_table = nullptr;
-        break;
+        return nullptr;
     case TableType::PlayersOnline:
-        new_table = &players_online_table;
-        break;
+        return &players_online_table;
     case TableType::BattleResults:
-        new_table = &battle_results_table;
-        break;
+        return &battle_results_table;
     case TableType::BattleQueue:
-        new_table = &battle_queue_table;
-        break;
+        return &battle_queue_table;
     case TableType::FinishedTimes:
-        new_table = &finished_times_table;
-        break;
+    case TableType::FinishedMultiTimes:
+        return &finished_times_table;
+    case TableType::BestTimes:
+        return &best_times_table;
     }
+    return nullptr;
+}
 
-    if (cur_table != new_table) {
-        cur_table = new_table;
-    } else {
-        cur_table = nullptr;
-        table = TableType::None;
-    }
-
+void eol::select_table(TableType table) {
+    cur_table = table_for(table);
     proto.send(show_table{.table = table});
+}
+
+void eol::set_table(TableType table) {
+    select_table(cur_table == table_for(table) ? TableType::None : table);
 }
 
 void eol::render_table(pic8& dest, abc8& title_font, abc8& data_font) const {
@@ -495,14 +657,7 @@ void eol::render_table(pic8& dest, abc8& title_font, abc8& data_font) const {
     cur_table->render(dest, title_font, data_font, EolSettings->table_alignment(), reserved_lines);
 }
 
-const kuski* eol::spy_kuski() {
-    if (!spy_kuski_id) {
-        return nullptr;
-    }
-
-    const kuski* k = get_kuski(kuskis_, *spy_kuski_id);
-    return k->spy_data() ? k : nullptr;
-}
+const kuski* eol::spy_kuski() { return spy_kuski_id ? get_kuski(kuskis_, *spy_kuski_id) : nullptr; }
 
 template <typename Range>
 static void set_spy_kuski(std::optional<unsigned int>& spy_kuski_id, Range&& range) {
@@ -538,8 +693,28 @@ void eol::spy_prev_kuski() { set_spy_kuski(spy_kuski_id, std::views::reverse(kus
 void eol::toggle_team_chat() {
     is_team_chat = !is_team_chat;
     StatusMessages->add(is_team_chat ? std::format("Team chat on (press {} to chat)",
-                                                   dik_to_string(State->key_chat))
+                                                   dik_to_string(EolSettings->chat_key()))
                                      : "Team chat off");
+}
+
+void eol::announce_shown_to() { proto.send(shown_to{.to = EolSettings->shown_to()}); }
+
+void eol::cycle_shown_to() {
+    switch (EolSettings->shown_to()) {
+    case ShownTo::Everyone:
+        EolSettings->set_shown_to(ShownTo::Team);
+        StatusMessages->add("only players of your team can see you");
+        break;
+    case ShownTo::Team:
+        EolSettings->set_shown_to(ShownTo::Nobody);
+        StatusMessages->add("other players can't see you");
+        break;
+    case ShownTo::Nobody:
+        EolSettings->set_shown_to(ShownTo::Everyone);
+        StatusMessages->add("other players can see you");
+        break;
+    }
+    announce_shown_to();
 }
 
 template <typename Range>
@@ -591,4 +766,11 @@ std::string eol::chat_prompt() const {
         return "[Team] ";
     }
     return "";
+}
+
+void eol::update_spy_kuskis() {
+    const uint32_t now = static_cast<uint32_t>(get_milliseconds());
+    for (kuski& k : kuskis_) {
+        k.update_spy_data(now, min_spy_frames);
+    }
 }

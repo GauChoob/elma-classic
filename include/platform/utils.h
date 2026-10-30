@@ -2,9 +2,9 @@
 #define PLATFORM_UTILS_H
 
 #ifndef _WIN32
-#include <unistd.h>
+#include <unistd.h> // IWYU pragma: export
 #else
-#include <io.h>
+#include <io.h> // IWYU pragma: export
 #endif
 
 #ifdef _WIN32
@@ -12,7 +12,6 @@
 #define strcmpi _strcmpi
 #define strncmpi _strncmpi
 #define strlwr _strlwr
-#define access _access
 #endif
 
 #ifndef _WIN32

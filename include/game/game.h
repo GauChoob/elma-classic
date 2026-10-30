@@ -1,11 +1,12 @@
-#ifndef GAME_H
-#define GAME_H
+#ifndef GAME_GAME_H
+#define GAME_GAME_H
 
-#include "game/recorder.h"
+#include "game/camera.h"
 #include <string>
 
 extern int Single;
 extern int FlagTag;
+extern bool ExitHidden;
 extern bool OutOfBounds;
 
 extern bool ScreenshotRequested;
@@ -13,17 +14,9 @@ extern bool VideoRecordingMode;
 extern int VideoFrameIndex;
 extern std::string VideoOutputDirectory;
 
-enum class CameraMode { Normal, MapViewer };
+void reload_graphic_assets();
 
-struct camera {
-    CameraMode mode;
-    double x;
-    double y;
-    double min_x;
-    double min_y;
-    double max_x;
-    double max_y;
-};
+bool configure_game();
 
 int game_loop(const char* filename, CameraMode camera_mode);
 int replay_loop(const char* filename, bool restore_player_visibility);

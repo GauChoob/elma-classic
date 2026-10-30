@@ -1,6 +1,7 @@
 #ifndef EOL_SETTINGS
 #define EOL_SETTINGS
 
+#include "eol/eol_events.h"
 #include "eol_table.h"
 #include "platform/scancode.h"
 #include <string>
@@ -83,27 +84,32 @@ template <typename T> struct Clamp {
 #ifndef DEBUG
 constexpr int DEFAULT_TCP_PORT = 4460;
 constexpr int DEFAULT_UDP_PORT = 4461;
+#define API_NAME "api.elma.online"
 #else
 constexpr int DEFAULT_TCP_PORT = 4470;
 constexpr int DEFAULT_UDP_PORT = 4471;
+#define API_NAME "apitest.elma.online"
 #endif
 
 class eol_settings {
     Clamp<int> screen_width_{640, 800, 10000};
     Clamp<int> screen_height_{480, 600, 10000};
 
+    Default<combo_scancode> high_quality_key_{combo_scancode{DIK_LCONTROL, DIK_H}};
     Default<bool> pictures_in_background_{false};
     Default<bool> default_ground_{false};
     Default<bool> default_sky_{false};
     Default<combo_scancode> default_ground_sky_key_{combo_scancode{DIK_LCONTROL, DIK_G}};
+    Default<combo_scancode> zoom_out_key_{combo_scancode{DIK_NONE, DIK_SUBTRACT}};
+    Default<combo_scancode> zoom_in_key_{combo_scancode{DIK_NONE, DIK_ADD}};
 
     Default<bool> center_camera_{false};
     Default<bool> center_map_{false};
     Default<MapAlignment> map_alignment_{MapAlignment::None};
     Default<RendererType> renderer_{RendererType::Software};
     Default<FullscreenMode> fullscreen_{FullscreenMode::Windowed};
-    Clamp<double> zoom_{0.25, 1.0, 3.0};
-    Clamp<double> minimap_zoom_{0.25, 1.0, 3.0};
+    Clamp<double> zoom_{0.25, 1.0, 10.0};
+    Clamp<double> minimap_zoom_{0.25, 1.0, 10.0};
     Default<bool> zoom_textures_{true};
     Default<bool> zoom_grass_{true};
     Clamp<double> turn_time_{0.0, 0.35, 0.35};
@@ -126,16 +132,19 @@ class eol_settings {
     Default<DikScancode> replay_rewind_key_{DIK_LEFT};
 
     Default<combo_scancode> show_others_key_{combo_scancode{DIK_NONE, DIK_F1}};
+    Default<combo_scancode> shown_to_key_{combo_scancode{DIK_LSHIFT, DIK_F1}};
     Default<combo_scancode> spy_next_kuski_key_{combo_scancode{DIK_NONE, DIK_F2}};
     Default<combo_scancode> spy_prev_kuski_key_{combo_scancode{DIK_LSHIFT, DIK_F2}};
     Default<combo_scancode> battle_queue_key_{combo_scancode{DIK_NONE, DIK_F3}};
     Default<combo_scancode> download_battle_level_key_{combo_scancode{DIK_NONE, DIK_F4}};
     Default<combo_scancode> download_level_key_{combo_scancode{DIK_LCONTROL, DIK_F4}};
     Default<combo_scancode> players_online_key_{combo_scancode{DIK_NONE, DIK_F5}};
+    Default<combo_scancode> best_times_key_{combo_scancode{DIK_LSHIFT, DIK_F5}};
     Default<combo_scancode> battle_results_key_{combo_scancode{DIK_NONE, DIK_F6}};
     Default<combo_scancode> finished_times_key_{combo_scancode{DIK_NONE, DIK_F7}};
     Default<combo_scancode> cycle_finished_times_filter_key_{combo_scancode{DIK_LSHIFT, DIK_F7}};
     Default<combo_scancode> clear_finished_times_key_{combo_scancode{DIK_LCONTROL, DIK_F7}};
+    Default<combo_scancode> toggle_last_apple_time_key_{combo_scancode{DIK_LCONTROL, DIK_F8}};
     Default<combo_scancode> chat_key_{combo_scancode{DIK_NONE, DIK_F9}};
     Default<combo_scancode> show_chat_key_{combo_scancode{DIK_LSHIFT, DIK_F9}};
     Default<combo_scancode> team_chat_key_{combo_scancode{DIK_LCONTROL, DIK_F9}};
@@ -145,15 +154,16 @@ class eol_settings {
     Default<combo_scancode> battle_status_key_{combo_scancode{DIK_NONE, DIK_F10}};
     Default<combo_scancode> battle_leader_key_{combo_scancode{DIK_LSHIFT, DIK_F10}};
     Default<combo_scancode> speedometer_key_{combo_scancode{DIK_LCONTROL, DIK_F10}};
+    Default<combo_scancode> download_battle_rec_key_{combo_scancode{DIK_NONE, DIK_F11}};
+    Default<combo_scancode> toggle_one_wheel_status_key_{combo_scancode{DIK_LCONTROL, DIK_F11}};
     Default<combo_scancode> reconnect_key_{combo_scancode{DIK_NONE, DIK_F12}};
     Default<combo_scancode> disconnect_key_{combo_scancode{DIK_LSHIFT, DIK_F12}};
-    Default<combo_scancode> toggle_one_wheel_status_key_{combo_scancode{DIK_LCONTROL, DIK_F11}};
-    Default<combo_scancode> toggle_last_apple_time_key_{combo_scancode{DIK_LCONTROL, DIK_F8}};
 
     Default<std::string> default_lgr_name_{"default"};
     Default<bool> fancyboost_{true};
 
     Default<bool> show_last_apple_time_{true};
+    Default<bool> show_lev_name_in_rec_{false};
     Default<bool> show_gravity_arrows_{true};
 
     Default<bool> show_fps_{false};
@@ -170,10 +180,19 @@ class eol_settings {
     Default<bool> still_objects_{false};
     Default<bool> all_internals_accessible_{false};
     Default<bool> show_total_time_{true};
+    Default<bool> show_timer_player_a_{true};
+    Default<bool> show_timer_player_b_{true};
+    Default<bool> show_minimap_player_a_{true};
+    Default<bool> show_minimap_player_b_{true};
+    Default<bool> show_replay_timer_player_a_{true};
+    Default<bool> show_replay_timer_player_b_{true};
+    Default<bool> show_replay_minimap_player_a_{false};
+    Default<bool> show_replay_minimap_player_b_{false};
     Clamp<int> minimap_width_{140, 140, 420};
     Clamp<int> minimap_height_{70, 70, 210};
     Clamp<int> minimap_opacity_{25, 100, 100};
     Clamp<int> chat_lines_{1, 10, 50};
+    Default<bool> large_font_{false};
     Default<bool> cripple_no_brake_{false};
     Default<bool> cripple_no_throttle_{false};
     Default<bool> cripple_always_throttle_{false};
@@ -183,9 +202,12 @@ class eol_settings {
     Default<bool> cripple_drunk_{false};
     Default<bool> cripple_one_wheel_{false};
     Default<bool> show_one_wheel_status_{false};
+
     Default<std::string> hostname_{"eol.elma.online"};
+    Default<std::string> api_name_{API_NAME};
     Default<int> tcp_port_{DEFAULT_TCP_PORT};
     Default<int> udp_port_{DEFAULT_UDP_PORT};
+
     Default<std::string> nick_{""};
     Default<std::string> password_{""};
     Default<bool> play_offline_{false};
@@ -198,20 +220,27 @@ class eol_settings {
 
     Default<eol_table::Align> table_alignment_{eol_table::Align::Center};
     Default<ChatVisibility> chat_visibility_{ChatVisibility::Shown};
+    Default<ShownTo> shown_to_{ShownTo::Everyone};
 
   public:
     static void read_settings();
+    // Applies a JSON file on top of settings.json for this session only, nothing is persisted.
+    static void read_overrides(const std::string& file);
     static void write_settings();
+    static void reset_keys();
     static void sync_controls_to_state(state* s);
     static void sync_controls_from_state(state* s);
 
     DECLARE_SETTING(screen_width);
     DECLARE_SETTING(screen_height);
 
-    DECLARE_SETTING(pictures_in_background);
+    DECLARE_SETTING(high_quality_key);
+    DECLARE_SETTING_CUSTOM(pictures_in_background);
     DECLARE_SETTING_CUSTOM(default_ground);
     DECLARE_SETTING_CUSTOM(default_sky);
     DECLARE_SETTING(default_ground_sky_key);
+    DECLARE_SETTING(zoom_out_key);
+    DECLARE_SETTING(zoom_in_key);
 
     DECLARE_SETTING(center_camera);
     DECLARE_SETTING(center_map);
@@ -242,12 +271,14 @@ class eol_settings {
     DECLARE_SETTING(replay_rewind_key);
 
     DECLARE_SETTING(show_others_key);
+    DECLARE_SETTING(shown_to_key);
     DECLARE_SETTING(spy_next_kuski_key);
     DECLARE_SETTING(spy_prev_kuski_key);
     DECLARE_SETTING(battle_queue_key);
     DECLARE_SETTING(download_battle_level_key);
     DECLARE_SETTING(download_level_key);
     DECLARE_SETTING(players_online_key);
+    DECLARE_SETTING(best_times_key);
     DECLARE_SETTING(battle_results_key);
     DECLARE_SETTING(finished_times_key);
     DECLARE_SETTING(cycle_finished_times_filter_key);
@@ -261,6 +292,7 @@ class eol_settings {
     DECLARE_SETTING(battle_status_key);
     DECLARE_SETTING(battle_leader_key);
     DECLARE_SETTING(speedometer_key);
+    DECLARE_SETTING(download_battle_rec_key);
     DECLARE_SETTING(reconnect_key);
     DECLARE_SETTING(disconnect_key);
     DECLARE_SETTING(toggle_one_wheel_status_key);
@@ -270,6 +302,7 @@ class eol_settings {
     DECLARE_SETTING_CUSTOM(fancyboost);
 
     DECLARE_SETTING(show_last_apple_time);
+    DECLARE_SETTING(show_lev_name_in_rec);
     DECLARE_SETTING(show_gravity_arrows);
 
     DECLARE_SETTING(show_fps);
@@ -286,10 +319,19 @@ class eol_settings {
     DECLARE_SETTING(still_objects);
     DECLARE_SETTING(all_internals_accessible);
     DECLARE_SETTING(show_total_time);
+    DECLARE_SETTING(show_timer_player_a);
+    DECLARE_SETTING(show_timer_player_b);
+    DECLARE_SETTING(show_minimap_player_a);
+    DECLARE_SETTING(show_minimap_player_b);
+    DECLARE_SETTING(show_replay_timer_player_a);
+    DECLARE_SETTING(show_replay_timer_player_b);
+    DECLARE_SETTING(show_replay_minimap_player_a);
+    DECLARE_SETTING(show_replay_minimap_player_b);
     DECLARE_SETTING(minimap_width);
     DECLARE_SETTING(minimap_height);
     DECLARE_SETTING(minimap_opacity);
     DECLARE_SETTING(chat_lines);
+    DECLARE_SETTING(large_font);
     DECLARE_SETTING(cripple_no_brake);
     DECLARE_SETTING_CUSTOM(cripple_no_throttle);
     DECLARE_SETTING_CUSTOM(cripple_always_throttle);
@@ -299,9 +341,12 @@ class eol_settings {
     DECLARE_SETTING(cripple_drunk);
     DECLARE_SETTING(cripple_one_wheel);
     DECLARE_SETTING(show_one_wheel_status);
+
     DECLARE_SETTING(hostname);
+    DECLARE_SETTING(api_name);
     DECLARE_SETTING(tcp_port);
     DECLARE_SETTING(udp_port);
+
     DECLARE_SETTING(nick);
     DECLARE_SETTING(password);
     DECLARE_SETTING(play_offline);
@@ -314,6 +359,7 @@ class eol_settings {
 
     DECLARE_SETTING(table_alignment);
     DECLARE_SETTING(chat_visibility);
+    DECLARE_SETTING(shown_to);
 };
 
 #undef SETTING_VALUE_TYPE

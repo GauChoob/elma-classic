@@ -66,31 +66,53 @@ jobs:
         run: meson setup build
 
       - name: Run clang-tidy
-        run: |
-          ninja -C build clang-tidy > clang-tidy-output.txt 2>&1 || true
-
-      - name: Show summary
-        run: |
-          echo "=== Clang-tidy Summary ==="
-          grep -E "warning:|error:" clang-tidy-output.txt 2>/dev/null || true
-          echo ""
-          echo "Total warnings: $(grep -c "warning:" clang-tidy-output.txt || true)"
-          echo "Total errors: $(grep -c "error:" clang-tidy-output.txt || true)"
-          echo ""
-          echo "Full output available in artifacts"
-
-          if grep -qE "warning:|error:" clang-tidy-output.txt; then
-            echo ""
-            echo "Clang-tidy found issues."
-            exit 1
-          fi
+        run: meson test -C build --suite clang-tidy --print-errorlogs
 
       - name: Upload clang-tidy results
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: clang-tidy-results
-          path: clang-tidy-output.txt
+          path: build/meson-logs/testlog.txt
+          retention-days: 5
+
+  tests:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev \
+            libx11-dev libxext-dev libxcursor-dev libxi-dev \
+            libxrandr-dev libxss-dev libxinerama-dev libxxf86vm-dev \
+            libegl-dev libgbm-dev \
+            libpulse-dev libasound2-dev libdbus-1-dev libudev-dev libibus-1.0-dev
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: python -m pip install meson==1.10.0 ninja
+
+      - name: Configure
+        run: meson setup build
+
+      - name: Run tests
+        run: meson test -C build --suite tests --print-errorlogs
+
+      - name: Upload tests results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tests-results
+          path: build/meson-logs/testlog.txt
           retention-days: 5
 
   build:
@@ -140,6 +162,17 @@ jobs:
             libxrandr-dev libxss-dev libxinerama-dev libxxf86vm-dev \
             libegl-dev libgbm-dev \
             libpulse-dev libasound2-dev libdbus-1-dev libudev-dev libibus-1.0-dev
+
+      - name: Configure system dependencies (macos-26)
+        if: matrix.os == 'macos-26'
+        run: |
+          # latest libcurl port to meson is curl-8.12.1
+          # curl-8.12.1 only supports openssl 3
+          # curl-8.20.0 supports openssl 4.0
+          # curl-8.23.0 supports openssl 4.1
+          # downgrade openssl from 4 to 3
+          OPENSSL_PREFIX="$(brew --prefix openssl@3)"
+          echo "PKG_CONFIG_PATH=$OPENSSL_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
 
       - name: Visual Studio
         if: runner.os == 'windows'

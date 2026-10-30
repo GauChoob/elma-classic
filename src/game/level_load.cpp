@@ -62,17 +62,13 @@ bool load_level_play(const char* levelname) {
             return false;
         }
 
-        lgrfile::load_lgr_file(Level->lgr_name);
+        lgrfile::load_lgr_file(Level->lgr_name, true);
         Level->load_sprite_wireframes(Lgr, false);
 
         START_TIME(segments_timer);
         delete Segments;
         Segments = new segments(Level);
-        if (HeadRadius > Motor1->left_wheel.radius) {
-            Segments->setup_collision_grid(HeadRadius);
-        } else {
-            Segments->setup_collision_grid(Motor1->left_wheel.radius);
-        }
+        Segments->setup_collision_grid(std::max(motorst::DEFAULT_LEFT_WHEEL.radius, HeadRadius));
         END_TIME(segments_timer, std::format("{} Segments", levelname))
 
         canvas::create_canvases();
@@ -82,7 +78,7 @@ bool load_level_play(const char* levelname) {
 
 bool load_level_editor(const char* levelname) {
     if (load_level(levelname)) {
-        lgrfile::load_lgr_file(Level->lgr_name);
+        lgrfile::load_lgr_file(Level->lgr_name, true);
         Level->load_sprite_wireframes(Lgr, true);
     }
 

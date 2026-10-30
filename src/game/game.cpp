@@ -1,11 +1,14 @@
 #include "game/game.h"
+#include "editor/dialog.h"
 #include "editor/editor.h"
+#include "eol/checkpoint.h"
 #include "eol/console.h"
 #include "eol/eol.h"
 #include "eol/settings.h"
 #include "eol/status_messages.h"
 #include "game/driver.h"
 #include "game/fps.h"
+#include "game/input.h"
 #include "level/level.h"
 #include "level/object.h"
 #include "level/segments.h"
@@ -18,17 +21,21 @@
 #include "platform/implementation.h"
 #include "platform/scancode.h"
 #include "platform/sdl/keyboard.h"
+#include "renderer/canvas.h"
 #include "renderer/render.h"
 #include "renderer/timer.h"
 #include "sound/engine.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <format>
+#include <limits>
 #include <optional>
 #include <utility>
 
 int Single = 1;
 int FlagTag = 0;
+bool ExitHidden = false;
 bool OutOfBounds = false;
 
 bool ScreenshotRequested = false;
@@ -64,24 +71,29 @@ static void push_chat_prompt() {
     }
 }
 
-static void handle_pm_target_keys() {
+static void handle_chat_target_keys() {
     if (!Console->in_chat_mode() || Console->in_command_prompt()) {
         return;
     }
 
     bool target_changed = false;
-    if (was_key_just_pressed(State->key_pm_next_kuski)) {
+    if (was_key_just_pressed(EolSettings->pm_next_kuski_key())) {
         EolClient->pm_next_kuski();
         target_changed = true;
     }
 
-    if (was_key_just_pressed(State->key_pm_prev_kuski)) {
+    if (was_key_just_pressed(EolSettings->pm_prev_kuski_key())) {
         EolClient->pm_prev_kuski();
         target_changed = true;
     }
 
-    if (was_key_just_pressed(State->key_pm_clear_kuski)) {
+    if (was_key_just_pressed(EolSettings->pm_clear_kuski_key())) {
         EolClient->clear_pm_kuski();
+        target_changed = true;
+    }
+
+    if (was_key_just_pressed(EolSettings->team_chat_key())) {
+        EolClient->toggle_team_chat();
         target_changed = true;
     }
 
@@ -127,35 +139,21 @@ static void toggle_download_prompt() {
 // to prevent key presses from affecting the gameplay.
 static bool handle_console_input() {
     bool was_active = Console->is_input_active();
-    if (was_key_just_pressed(State->key_chat)) {
+    if (was_key_just_pressed(EolSettings->chat_key())) {
         if (Console->is_input_active() ||
             EolSettings->chat_visibility() != ChatVisibility::Hidden) {
             Console->toggle_active();
             push_chat_prompt();
         }
     } else if (Console->is_input_active()) {
-        if (was_key_just_pressed(State->key_download_level)) {
+        if (was_key_just_pressed(EolSettings->download_level_key())) {
             toggle_download_prompt();
         } else {
-            handle_pm_target_keys();
+            handle_chat_target_keys();
             Console->handle_input();
         }
     }
     return was_active;
-}
-
-static bool is_game_key_down(DikScancode code) {
-    if (Console->is_input_active()) {
-        return false;
-    }
-    return is_key_down(code);
-}
-
-template <typename Scancode> static bool was_game_key_just_pressed(Scancode code) {
-    if (Console->is_input_active()) {
-        return false;
-    }
-    return was_key_just_pressed(code);
 }
 
 static void latch_one_frame_brake(driver& driv) {
@@ -163,34 +161,6 @@ static void latch_one_frame_brake(driver& driv) {
         driv.one_frame_brake_pending = true;
     }
 }
-
-static void update_freecam(double dt, camera& current_camera) {
-    double speed = 30.0;
-    if (is_game_key_down(DIK_LSHIFT) || is_game_key_down(DIK_RSHIFT)) {
-        speed *= 4.0;
-    }
-    double move = speed * dt;
-    if (is_game_key_down(DIK_UP)) {
-        current_camera.y += move;
-    }
-    if (is_game_key_down(DIK_DOWN)) {
-        current_camera.y -= move;
-    }
-    if (is_game_key_down(DIK_LEFT)) {
-        current_camera.x -= move;
-    }
-    if (is_game_key_down(DIK_RIGHT)) {
-        current_camera.x += move;
-    }
-
-    current_camera.x = std::clamp(current_camera.x, current_camera.min_x, current_camera.max_x);
-    current_camera.y = std::clamp(current_camera.y, current_camera.min_y, current_camera.max_y);
-}
-
-static hud_visibility HudGame1 = {true, true};
-static hud_visibility HudReplay1 = {false, true};
-static hud_visibility HudGame2 = {true, true};
-static hud_visibility HudReplay2 = {false, true};
 
 static void sound_init() {
     static bool SoundInitialized = false;
@@ -249,6 +219,9 @@ static void physics_subframe(driver& driv, double time, double dt) {
 
     using namespace BattleAttributes;
     const Kind cripples = active_cripples();
+    if (!(cripples & Drunk)) {
+        driv.stats.drunk = false;
+    }
     if ((cripples & Drunk) && ((mot->apple_count - mot->apple_bug_count) & 1)) {
         std::swap(is_gas_down, is_brake_down);
         std::swap(is_right_volt_down, is_left_volt_down);
@@ -262,6 +235,19 @@ static void physics_subframe(driver& driv, double time, double dt) {
     if (cripples & AlwaysThrottle) {
         is_gas_down = true;
         is_brake_down = false;
+    }
+
+    // Brake wins over gas, so gas held under brake is not throttling
+    const bool throttling = is_gas_down && !is_brake_down;
+    if (throttling) {
+        driv.stats.throttle_time += dt;
+    } else {
+        driv.stats.throttle_released = true;
+    }
+    if (is_brake_down) {
+        driv.stats.brake_time += dt;
+    } else {
+        driv.stats.brake_released = true;
     }
 
     bool right_volt = false;
@@ -278,6 +264,13 @@ static void physics_subframe(driver& driv, double time, double dt) {
             metadata->volt_time = time;
             metadata->volt_is_right = false;
             add_event_buffer(WavEvent::LeftVolt, 0.99, -1);
+        }
+        if (right_volt && left_volt) {
+            driv.stats.super_volt_count++;
+        } else if (right_volt) {
+            driv.stats.right_volt_count++;
+        } else if (left_volt) {
+            driv.stats.left_volt_count++;
         }
     }
 
@@ -298,12 +291,8 @@ static void physics_subframe(driver& driv, double time, double dt) {
         }
 
         // Flag Tag respawn
-        init_motor(mot);
-        mot->bike.r = mot->bike.r + BikeStartOffset;
-        mot->left_wheel.r = mot->left_wheel.r + BikeStartOffset;
-        mot->right_wheel.r = mot->right_wheel.r + BikeStartOffset;
-        mot->body_r = mot->body_r + BikeStartOffset;
-        mot->head_r = mot->head_r + BikeStartOffset;
+        mot->init();
+        mot->spawn(Level->start_position);
 
         driv.reset_metadata();
 
@@ -347,30 +336,6 @@ static void physics_subframe(driver& driv, double time, double dt) {
 
     if (cripples & OneWheel && driv.mot->one_wheel_failed) {
         driv.dead = true;
-    }
-}
-
-static void update_view_settings(driver& driv, bool* other_draw_view) {
-    player_keys* keys = driv.keys;
-
-    // Visibility of player viewpoint
-    if (was_game_key_just_pressed(keys->toggle_visibility)) {
-        reset_game_background();
-        if (!*other_draw_view) {
-            // You cannot have 0 players visible, so make both players visible instead
-            *other_draw_view = true;
-            driv.draw_view = true;
-        } else {
-            driv.draw_view = !driv.draw_view;
-        }
-    }
-
-    if (was_game_key_just_pressed(keys->toggle_minimap)) {
-        driv.hud->minimap = !driv.hud->minimap;
-    }
-
-    if (was_game_key_just_pressed(keys->toggle_timer)) {
-        driv.hud->timer = !driv.hud->timer;
     }
 }
 
@@ -458,86 +423,106 @@ static void physics_frame_turn(driver& driv) {
             mot->flipped_bike = !mot->flipped_bike;
             set_head_position(mot);
             metadata->one_turn_used = true;
+            driv.stats.turn_count++;
         }
         metadata->turn_key_previous = is_turn_down;
     }
 }
 
 static void handle_eol_inputs() {
-    if (was_game_key_just_pressed(State->key_show_others)) {
+    if (was_game_key_just_pressed(EolSettings->show_others_key())) {
         EolSettings->set_show_others(!EolSettings->show_others());
         StatusMessages->add(EolSettings->show_others() ? "other players shown"
                                                        : "other players hidden");
     }
 
-    if (was_game_key_just_pressed(State->key_spy_next_kuski)) {
+    if (was_game_key_just_pressed(EolSettings->shown_to_key())) {
+        EolClient->cycle_shown_to();
+    }
+
+    if (was_game_key_just_pressed(EolSettings->spy_next_kuski_key())) {
         EolClient->spy_next_kuski();
     }
-    if (was_game_key_just_pressed(State->key_spy_prev_kuski)) {
+    if (was_game_key_just_pressed(EolSettings->spy_prev_kuski_key())) {
         EolClient->spy_prev_kuski();
     }
 
-    if (was_game_key_just_pressed(State->key_battle_queue)) {
+    if (was_game_key_just_pressed(EolSettings->battle_queue_key())) {
         EolClient->toggle_battle_queue();
     }
 
-    if (was_game_key_just_pressed(State->key_download_battle_level)) {
+    if (was_game_key_just_pressed(EolSettings->download_battle_level_key())) {
         EolClient->download_battle_level();
     }
-    if (was_game_key_just_pressed(State->key_download_level)) {
+
+    if (was_game_key_just_pressed(EolSettings->download_level_key())) {
         toggle_download_prompt();
     }
 
-    if (was_game_key_just_pressed(State->key_players_online)) {
+    if (was_game_key_just_pressed(EolSettings->players_online_key())) {
         EolClient->set_table(TableType::PlayersOnline);
     }
 
-    if (was_game_key_just_pressed(State->key_battle_results)) {
+    if (was_game_key_just_pressed(EolSettings->best_times_key())) {
+        EolClient->toggle_best_times();
+    }
+
+    if (was_game_key_just_pressed(EolSettings->battle_results_key())) {
         EolClient->toggle_battle_results();
     }
 
-    if (was_game_key_just_pressed(State->key_finished_times)) {
+    if (was_game_key_just_pressed(EolSettings->finished_times_key())) {
         EolClient->toggle_finished_times();
     }
-    if (was_game_key_just_pressed(State->key_cycle_finished_times_filter)) {
+    if (was_game_key_just_pressed(EolSettings->cycle_finished_times_filter_key())) {
         EolClient->cycle_finished_times_filter();
     }
-    if (was_game_key_just_pressed(State->key_clear_finished_times)) {
+    if (was_game_key_just_pressed(EolSettings->clear_finished_times_key())) {
         EolClient->clear_finished_times();
     }
 
-    if (was_game_key_just_pressed(State->key_battle_status)) {
+    if (was_game_key_just_pressed(EolSettings->battle_status_key())) {
         EolClient->toggle_battle_status();
     }
-    if (was_game_key_just_pressed(State->key_battle_leader)) {
+    if (was_game_key_just_pressed(EolSettings->battle_leader_key())) {
         EolClient->toggle_show_battle_leader();
     }
-    if (was_game_key_just_pressed(State->key_speedometer)) {
+    if (was_game_key_just_pressed(EolSettings->speedometer_key())) {
         EolSettings->set_show_speedometer(!EolSettings->show_speedometer());
         StatusMessages->add(EolSettings->show_speedometer() ? "speedometer shown"
                                                             : "speedometer hidden");
     }
 
-    if (was_game_key_just_pressed(State->key_show_chat)) {
+    if (was_game_key_just_pressed(EolSettings->download_battle_rec_key())) {
+        EolClient->download_battle_win_rec();
+    }
+
+    if (was_game_key_just_pressed(EolSettings->show_chat_key())) {
         Console->cycle_show_chat();
     }
-    if (was_game_key_just_pressed(State->key_team_chat)) {
+    if (was_game_key_just_pressed(EolSettings->team_chat_key())) {
         EolClient->toggle_team_chat();
     }
 
-    if (was_game_key_just_pressed(State->key_reconnect)) {
+    if (was_game_key_just_pressed(EolSettings->reconnect_key())) {
         EolSettings->set_play_offline(false);
         EolClient->disconnect();
         EolClient->connect();
     }
 
-    if (was_game_key_just_pressed(State->key_disconnect)) {
+    if (was_game_key_just_pressed(EolSettings->disconnect_key())) {
         EolSettings->set_play_offline(true);
         EolClient->disconnect();
         StatusMessages->add("disconnected from the server");
     }
 
-    if (was_game_key_just_pressed(State->key_default_ground_sky)) {
+    if (was_game_key_just_pressed(EolSettings->high_quality_key())) {
+        State->high_quality = !State->high_quality;
+        canvas::invalidate_canvases();
+        StatusMessages->add(std::format("Video Detail: {}", State->high_quality ? "High" : "Low"));
+    }
+
+    if (was_game_key_just_pressed(EolSettings->default_ground_sky_key())) {
         int permutation = (EolSettings->default_ground() << 1) | (EolSettings->default_sky() << 0);
         permutation = (permutation + 3) % 4;
         bool ground = (permutation & 0b10) != 0;
@@ -561,38 +546,114 @@ static void handle_eol_inputs() {
         }
     }
 
-    if (was_game_key_just_pressed(State->key_toggle_one_wheel_status)) {
+    if (was_game_key_just_pressed(EolSettings->zoom_out_key())) {
+        const double zoom = EolSettings->zoom() - 0.25;
+        EolSettings->set_zoom(zoom);
+        StatusMessages->add(std::format("Zoom: {:.2f}", EolSettings->zoom()));
+    }
+
+    if (was_game_key_just_pressed(EolSettings->zoom_in_key())) {
+        const double zoom = EolSettings->zoom() + 0.25;
+        EolSettings->set_zoom(zoom);
+        StatusMessages->add(std::format("Zoom: {:.2f}", EolSettings->zoom()));
+    }
+
+    if (was_game_key_just_pressed(EolSettings->toggle_one_wheel_status_key())) {
         EolSettings->set_show_one_wheel_status(!EolSettings->show_one_wheel_status());
         StatusMessages->add(EolSettings->show_one_wheel_status() ? "one-wheel status shown"
                                                                  : "one-wheel status hidden");
     }
 
-    if (was_game_key_just_pressed(State->key_toggle_last_apple_time)) {
+    if (was_game_key_just_pressed(EolSettings->toggle_last_apple_time_key())) {
         EolSettings->set_show_last_apple_time(!EolSettings->show_last_apple_time());
         StatusMessages->add(EolSettings->show_last_apple_time() ? "last apple time shown"
                                                                 : "last apple time hidden");
     }
 }
 
+static void handle_mouse() {
+    game_mouse pos = get_mouse_position_game();
+    mouse_input input = {was_left_mouse_just_clicked(), was_middle_mouse_just_clicked(),
+                         was_right_mouse_just_clicked(), false};
+
+    if (clickable::callback) {
+        // We are holding something - use the callback
+        clickable::callback(pos, input);
+    } else if (input.left_click || input.middle_click || input.right_click) {
+        // No callback - default behaviour
+
+        // Click on something
+        int dist = std::numeric_limits<int>::max();
+        clickable* closest = nullptr;
+        checkpoint::get_closest(pos, dist, closest);
+        if (closest) {
+            if (input.left_click) {
+                closest->left_clicked(pos);
+            } else if (input.middle_click) {
+                closest->middle_clicked(pos);
+            } else if (input.right_click) {
+                closest->right_clicked(pos);
+            }
+            return;
+        }
+
+        // We didn't find anything. Click in thin air
+        checkpoint::editor_click(pos, input);
+    }
+}
+
+static void abort_mouse() {
+    if (!clickable::callback) {
+        return;
+    }
+
+    // Drop whatever we are holding
+    game_mouse pos = get_mouse_position_game();
+    mouse_input input;
+    input.abort = true;
+    clickable::callback(pos, input);
+}
+
+void reload_graphic_assets() {
+    lgrfile::recreate_lgr_if_needed();
+    canvas::recreate_canvases_if_needed();
+}
+
+bool configure_game() {
+    bool map_viewer = false;
+    if (is_key_down(DIK_F1)) {
+        map_viewer = true;
+    }
+    if (is_key_down(DIK_F2)) {
+        map_viewer = true;
+        checkpoint::Editor = true;
+        StatusMessages->add("Checkpoint editor enabled: click to add checkpoints");
+    } else {
+        checkpoint::Editor = false;
+    }
+    return map_viewer;
+}
+
 // Common setup function
 static void setup_gameloop(const char* filename) {
-    load_best_time(filename, Single);
+    reload_graphic_assets();
 
-    init_physics_data();
+    load_best_time(filename, Single);
 
     if (!Level) {
         internal_error("setup_gameloop() !Level!");
     }
     Level->flip_objects();
     Level->sort_objects();
-
-    TotalApples = Level->initialize_objects(Motor1);
-    Level->initialize_objects(Motor2);
+    TotalApples = Level->initialize_objects();
 
     reset_game_background();
 
     flagtag_reset();
 
+    init_physics_data();
+    Motor1->spawn(Level->start_position);
+    Motor2->spawn(Level->start_position);
     Motor1->apple_count = 0;
     Motor2->apple_count = 0;
     Motor1->apple_bug_count = 0;
@@ -603,6 +664,13 @@ static void setup_gameloop(const char* filename) {
     Lgr->pal->set();
 }
 
+static void cleanup_game_loop() {
+    Mute = true;
+    Level->unflip_objects();
+
+    abort_mouse();
+}
+
 int WhoDiedFirst = 0;
 bool Player1Finished = false;
 
@@ -611,12 +679,20 @@ struct NumpadNavGuard {
     NumpadNavGuard() { keyboard::set_numpad_nav(false); }
     ~NumpadNavGuard() { keyboard::set_numpad_nav(true); }
 };
+
+struct ScreensaverSuspend {
+    ScreensaverSuspend() { disable_screensaver(); }
+    ~ScreensaverSuspend() { enable_screensaver(); }
+};
 } // namespace
 
 int game_loop(const char* filename, CameraMode camera_mode) {
     // Bindings during gameplay must be honored by raw scancode: numpad-6
     // is right-volt, not "Right Arrow when NumLock is off".
     NumpadNavGuard numpad_nav_guard;
+
+    // Disable screensaver during gameplay.
+    ScreensaverSuspend screensaver_suspend;
 
     WhoDiedFirst = 0;
     Player1Finished = false;
@@ -633,32 +709,30 @@ int game_loop(const char* filename, CameraMode camera_mode) {
     double time = 0.0;
     reset_event_buffer();
 
+    EnterMode mode = EnterMode::Play;
+    if (InEditor) {
+        mode = EnterMode::Editor;
+    } else if (camera_mode == CameraMode::MapViewer) {
+        mode = EnterMode::Spy;
+    }
     if (Single) {
-        EolClient->enter_level(filename, Level, camera_mode == CameraMode::MapViewer);
+        EolClient->enter_level(filename, Level, mode);
     }
 
     BattleRunCripples.reset();
     if (Single && camera_mode != CameraMode::MapViewer) {
         BattleRunCripples = EolClient->battle_cripples();
     }
+    ExitHidden = (!Single && FlagTag) || EolClient->battle_hides_exit();
 
     pacer::reset();
 
-    driver driv1(Motor1, Rec1, &State->keys1, &HudGame1);
-    driver driv2(Motor2, Rec2, &State->keys2, &HudGame2);
+    driver driv1(Motor1, Rec1, &State->keys1);
+    driver driv2(Motor2, Rec2, &State->keys2);
+    driv1.stats.drunk = driv2.stats.drunk = active_cripples() & BattleAttributes::Drunk;
 
-    camera current_camera;
-    current_camera.mode = camera_mode;
-    current_camera.x = Motor1->bike.r.x;
-    current_camera.y = Motor1->bike.r.y;
-
-    double level_min_y;
-    double level_max_y;
-    Level->get_boundaries(&current_camera.min_x, &level_min_y, &current_camera.max_x, &level_max_y,
-                          false);
-    // Convert level y-coordinates to camera y-coordinates
-    current_camera.min_y = -level_max_y;
-    current_camera.max_y = -level_min_y;
+    camera current_camera(camera_mode, false, State);
+    current_camera.init_freecam(Level, Motor1);
 
     sound_init();
     // Stay muted if no bike is visible.
@@ -694,7 +768,9 @@ int game_loop(const char* filename, CameraMode camera_mode) {
             while (pacer::subframe(&dt)) {
                 ran_subframes = true;
                 if (current_camera.mode == CameraMode::MapViewer) {
-                    update_freecam(dt, current_camera);
+                    if (!EolClient->spy_kuski()) {
+                        current_camera.update_freecam(dt);
+                    }
                     time += dt;
                     continue;
                 }
@@ -745,17 +821,16 @@ int game_loop(const char* filename, CameraMode camera_mode) {
 
                     stop_motor_sound(true);
                     stop_motor_sound(false);
-                    Mute = true;
 
-                    if (Single) {
-                        EolClient->exit_level(filename, time * TIME_TO_CENTISECONDS,
-                                              Motor1->apple_count - Motor1->apple_bug_count,
-                                              TotalApples, !finish_time, false);
-                    }
+                    cleanup_game_loop();
 
-                    Level->unflip_objects();
                     Rec1->encode_frame_count();
                     Rec2->encode_frame_count();
+                    if (Single && !InEditor) {
+                        EolClient->exit_level(driv1, Level, time * TIME_TO_CENTISECONDS,
+                                              TotalApples, camera_mode == CameraMode::MapViewer);
+                    }
+
                     if (finish_time) {
                         return finish_time;
                     }
@@ -803,12 +878,9 @@ int game_loop(const char* filename, CameraMode camera_mode) {
         if (!Single) {
             update_graphical_metadata(driv2, true, time);
         }
+        EolClient->update_spy_kuskis();
 
-        // Update the hud and player visibility
-        update_view_settings(driv1, &driv2.draw_view);
-        if (!Single) {
-            update_view_settings(driv2, &driv1.draw_view);
-        }
+        current_camera.update_view_settings(Single);
 
         render_game(time, driv1, driv2, current_camera, GameLoop::Game);
 
@@ -824,22 +896,22 @@ int game_loop(const char* filename, CameraMode camera_mode) {
         }
 
         handle_eol_inputs();
+        handle_mouse();
 
-        if (!console_was_active &&
-            (was_key_just_pressed(DIK_ESCAPE) || was_key_just_pressed(State->key_escape_alias))) {
+        if (!console_was_active && (was_key_just_pressed(DIK_ESCAPE) ||
+                                    was_key_just_pressed(EolSettings->escape_alias_key()))) {
             WhoDiedFirst = 0;
 
             stop_motor_sound(true);
             stop_motor_sound(false);
-            Mute = true;
 
-            Level->unflip_objects();
+            cleanup_game_loop();
+
             Rec1->encode_frame_count();
             Rec2->encode_frame_count();
-            if (Single) {
-                EolClient->exit_level(filename, time * TIME_TO_CENTISECONDS,
-                                      Motor1->apple_count - Motor1->apple_bug_count, TotalApples,
-                                      false, true);
+            if (Single && !InEditor) {
+                EolClient->exit_level(driv1, Level, time * TIME_TO_CENTISECONDS, TotalApples,
+                                      camera_mode == CameraMode::MapViewer);
             }
             return -1;
         }
@@ -890,13 +962,10 @@ static void rewind_override_animations(driver& driv, double time) {
 }
 
 // Load replay data (instead of simulating bike physics)
-static bool replay_frame(driver& driv, double time, bool* other_draw_view) {
+static bool replay_frame(driver& driv, double time) {
     motorst* mot = driv.mot;
     bike_metadata* metadata = &driv.meta;
     recorder* rec = driv.rec;
-
-    // Update the hud and player visibility
-    update_view_settings(driv, other_draw_view);
 
     // Load replay data
     bool alive = rec->recall_frame(mot, time, &driv.sound);
@@ -925,6 +994,20 @@ static bool replay_frame(driver& driv, double time, bool* other_draw_view) {
     return alive;
 }
 
+static void sync_replay_death(driver& driv, bool finished, bool is_motor1) {
+    if (driv.dead == finished) {
+        return;
+    }
+
+    driv.dead = finished;
+
+    if (finished) {
+        stop_motor_sound(is_motor1);
+    } else {
+        start_motor_sound(is_motor1);
+    }
+}
+
 static bool PreviousReplayDrawView1 = true;
 static bool PreviousReplayDrawView2 = true;
 
@@ -932,6 +1015,9 @@ int replay_loop(const char* filename, bool restore_player_visibility) {
     // Bindings during gameplay must be honored by raw scancode: numpad-6
     // is right-volt, not "Right Arrow when NumLock is off".
     NumpadNavGuard numpad_nav_guard;
+
+    // Disable screensaver during gameplay.
+    ScreensaverSuspend screensaver_suspend;
 
     // Refuse to play zero-length replays (from map-viewer mode)
     if (Rec1->is_empty()) {
@@ -946,23 +1032,24 @@ int replay_loop(const char* filename, bool restore_player_visibility) {
 
     Single = !MultiplayerRec;
     FlagTag = Rec1->flagtag();
+    ExitHidden = !Single && FlagTag;
 
     setup_gameloop(filename);
 
     reset_event_buffer();
     stopwatch_reset();
 
-    driver driv1(Motor1, Rec1, &State->keys1, &HudReplay1);
-    driver driv2(Motor2, Rec2, &State->keys2, &HudReplay2);
+    EolClient->enter_level(filename, Level, EnterMode::Replay);
 
-    driv2.draw_view = !MergedRec;
+    driver driv1(Motor1, Rec1, &State->keys1);
+    driver driv2(Motor2, Rec2, &State->keys2);
+
+    camera current_camera(CameraMode::Normal, true, State);
+    current_camera.player2.draw_view = !MergedRec;
     if (restore_player_visibility) {
-        driv1.draw_view = PreviousReplayDrawView1;
-        driv2.draw_view = PreviousReplayDrawView2;
+        current_camera.player1.draw_view = PreviousReplayDrawView1;
+        current_camera.player2.draw_view = PreviousReplayDrawView2;
     }
-
-    camera current_camera;
-    current_camera.mode = CameraMode::Normal;
 
     sound_init();
     Mute = false;
@@ -986,24 +1073,24 @@ int replay_loop(const char* filename, bool restore_player_visibility) {
         last_stopwatch = now;
 
         double speed = 1.0;
-        if (is_game_key_down(State->key_replay_fast_2x)) {
+        if (is_game_key_down(EolSettings->replay_fast_2x_key())) {
             speed *= 2.0;
         }
-        if (is_game_key_down(State->key_replay_fast_4x)) {
+        if (is_game_key_down(EolSettings->replay_fast_4x_key())) {
             speed *= 4.0;
         }
-        if (is_game_key_down(State->key_replay_fast_8x)) {
+        if (is_game_key_down(EolSettings->replay_fast_8x_key())) {
             speed *= 8.0;
         }
-        if (is_game_key_down(State->key_replay_slow_2x)) {
+        if (is_game_key_down(EolSettings->replay_slow_2x_key())) {
             speed *= 0.5;
         }
-        if (is_game_key_down(State->key_replay_slow_4x)) {
+        if (is_game_key_down(EolSettings->replay_slow_4x_key())) {
             speed *= 0.25;
         }
 
-        bool rewinding = is_game_key_down(State->key_replay_rewind);
-        bool paused = is_game_key_down(State->key_replay_pause);
+        bool rewinding = is_game_key_down(EolSettings->replay_rewind_key());
+        bool paused = is_game_key_down(EolSettings->replay_pause_key());
 
         if (!paused) {
             if (rewinding) {
@@ -1016,11 +1103,13 @@ int replay_loop(const char* filename, bool restore_player_visibility) {
 
         double time = current_replay_time;
 
+        current_camera.update_view_settings(Single);
+
         // Load replay data
-        bool finished1 = !replay_frame(driv1, time, &driv2.draw_view);
+        bool finished1 = !replay_frame(driv1, time);
         bool finished2 = false;
         if (!Single) {
-            finished2 = !replay_frame(driv2, time, &driv1.draw_view);
+            finished2 = !replay_frame(driv2, time);
         }
 
         // Reverse events if rewinding
@@ -1047,11 +1136,10 @@ int replay_loop(const char* filename, bool restore_player_visibility) {
             set_friction_volume(0.0);
             delay((int)(LevelEndDelay * 400.0));
 
-            Mute = true;
-            Level->unflip_objects();
+            cleanup_game_loop();
 
-            PreviousReplayDrawView1 = driv1.draw_view;
-            PreviousReplayDrawView2 = driv2.draw_view;
+            PreviousReplayDrawView1 = current_camera.player1.draw_view;
+            PreviousReplayDrawView2 = current_camera.player2.draw_view;
             Single = saved_single;
             FlagTag = saved_tag;
             return 0;
@@ -1059,14 +1147,8 @@ int replay_loop(const char* filename, bool restore_player_visibility) {
 
         // Death (or finish)
         if (!Single) {
-            if (!driv1.dead && finished1) {
-                stop_motor_sound(true);
-                driv1.dead = true;
-            }
-            if (!driv2.dead && finished2) {
-                stop_motor_sound(false);
-                driv2.dead = true;
-            }
+            sync_replay_death(driv1, finished1, true);
+            sync_replay_death(driv2, finished2, false);
 
             // Update flagtag time
             flagtag_replay(time);
@@ -1103,12 +1185,10 @@ int replay_loop(const char* filename, bool restore_player_visibility) {
             set_friction_volume(0.0);
             delay((int)(LevelEndDelay * 400.0));
 
-            Mute = true;
+            cleanup_game_loop();
 
-            Level->unflip_objects();
-
-            PreviousReplayDrawView1 = driv1.draw_view;
-            PreviousReplayDrawView2 = driv2.draw_view;
+            PreviousReplayDrawView1 = current_camera.player1.draw_view;
+            PreviousReplayDrawView2 = current_camera.player2.draw_view;
             Single = saved_single;
             FlagTag = saved_tag;
             return -1;
@@ -1131,18 +1211,23 @@ void setup_render_directory(const std::string& replay_filename) {
 }
 
 void render_replay(const char* level_filename) {
+    // Disable screensaver during gameplay.
+    ScreensaverSuspend screensaver_suspend;
+
     Single = !MultiplayerRec;
     FlagTag = Rec1->flagtag();
+    ExitHidden = !Single && FlagTag;
     setup_gameloop(level_filename);
 
-    camera current_camera;
-    current_camera.mode = CameraMode::Normal;
+    EolClient->enter_level(level_filename, Level, EnterMode::Replay);
+
+    camera current_camera(CameraMode::Normal, true, State);
 
     VideoRecordingMode = true;
     VideoFrameIndex = 0;
 
-    driver driv1(Motor1, Rec1, &State->keys1, &HudReplay1);
-    driver driv2(Motor2, Rec2, &State->keys2, &HudReplay2);
+    driver driv1(Motor1, Rec1, &State->keys1);
+    driver driv2(Motor2, Rec2, &State->keys2);
 
     fps::reset();
     while (true) {
@@ -1154,10 +1239,12 @@ void render_replay(const char* level_filename) {
         double time = (double)VideoFrameIndex * (pacer::MILLISECONDS_TO_PHYS_TIME * 1000.0) /
                       EolSettings->recording_fps();
 
-        bool finished1 = !replay_frame(driv1, time, &driv2.draw_view);
+        current_camera.update_view_settings(Single);
+
+        bool finished1 = !replay_frame(driv1, time);
         bool finished2 = false;
         if (!Single) {
-            finished2 = !replay_frame(driv2, time, &driv1.draw_view);
+            finished2 = !replay_frame(driv2, time);
         }
 
         update_graphical_metadata(driv1, false, time);
@@ -1179,5 +1266,5 @@ void render_replay(const char* level_filename) {
     }
 
     VideoRecordingMode = false;
-    Level->unflip_objects();
+    cleanup_game_loop();
 }

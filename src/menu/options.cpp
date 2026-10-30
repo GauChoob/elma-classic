@@ -1,6 +1,6 @@
 #include "menu/options.h"
+#include "eol/eol.h"
 #include "eol/settings.h"
-#include "game/level_load.h"
 #include "game/state.h"
 #include "main.h"
 #include "menu/ball.h"
@@ -11,6 +11,7 @@
 #include "menu/player.h"
 #include "pic/surface.h"
 #include "platform/implementation.h"
+#include "renderer/canvas.h"
 #include "util/file_iter.h"
 #include <cmath>
 #include <cstring>
@@ -45,6 +46,7 @@ void menu_about() {
     // Alphabetical
     nav.add_row("amarshalov", "", NAV_FUNC(){});
     nav.add_row("Smibu", "", NAV_FUNC(){});
+    nav.add_row("Zweq", "", NAV_FUNC(){});
 
     nav.navigate();
 
@@ -237,8 +239,15 @@ void menu_options() {
         nav.add_row("Player B:", State->player2, NAV_FUNC() { menu_player_choose(false, true); });
 
         nav.add_row(
-            "Sound:", State->sound_on ? "Enabled" : "Disabled",
-            NAV_FUNC() { State->sound_on = !State->sound_on; });
+            "Sound:", State->sound_on ? "Enabled" : "Disabled", NAV_FUNC() {
+                if (State->sound_on) {
+                    close_sound_device();
+                    State->sound_on = 0;
+                } else {
+                    open_sound_device();
+                    State->sound_on = 1;
+                }
+            });
 
         nav.add_row(
             "Animated Menus:", State->animated_menus ? "Yes" : "No",
@@ -247,7 +256,7 @@ void menu_options() {
         nav.add_row(
             "Video Detail:", State->high_quality ? "High" : "Low", NAV_FUNC() {
                 State->high_quality = !State->high_quality;
-                invalidate_level();
+                canvas::invalidate_canvases();
             });
 
         nav.add_row(
@@ -266,19 +275,30 @@ void menu_options() {
 
         nav.add_row("Cripples ...", NAV_FUNC() { menu_cripples(); });
 
-        nav.add_row(
-            "Pics In Background:", EolSettings->pictures_in_background_persisted() ? "Yes" : "No",
-            NAV_FUNC() {
-                EolSettings->persist_pictures_in_background(
-                    !EolSettings->pictures_in_background_persisted());
-                invalidate_level();
-            });
+        BOOL_OPTION("Pics In Background:", pictures_in_background);
 
         BOOL_OPTION("Override Ground:", default_ground);
         BOOL_OPTION("Override Sky:", default_sky);
 
         BOOL_OPTION("Centered Camera:", center_camera);
         BOOL_OPTION("Centered Minimap:", center_map);
+
+// macro to keep the player A and player B default show_X settings in sync
+#define SHOW_X_OPTION(name, setting)                                                               \
+    nav.add_row(                                                                                   \
+        name, EolSettings->setting##_player_a_persisted() ? "Yes" : "No", NAV_FUNC() {             \
+            EolSettings->persist_##setting##_player_a(                                             \
+                !EolSettings->setting##_player_a_persisted());                                     \
+            EolSettings->persist_##setting##_player_b(                                             \
+                EolSettings->setting##_player_a_persisted());                                      \
+        });
+
+        SHOW_X_OPTION("Show Timer", show_timer);
+        SHOW_X_OPTION("Show Minimap", show_minimap);
+        SHOW_X_OPTION("Show Replay Timer", show_replay_timer);
+        SHOW_X_OPTION("Show Replay Minimap", show_replay_minimap);
+
+#undef SHOW_X_OPTION
 
         nav.add_row(
             "Minimap Alignment:",
@@ -440,6 +460,7 @@ void menu_options() {
         BOOL_OPTION("Fancyboost LGRs:", fancyboost);
 
         BOOL_OPTION("Show Apple Time:", show_last_apple_time);
+        BOOL_OPTION("Show Lev Name In Rec:", show_lev_name_in_rec);
         BOOL_OPTION("Gravity Arrows:", show_gravity_arrows);
 
         BOOL_OPTION("Show FPS:", show_fps);
@@ -515,6 +536,36 @@ void menu_options() {
                     EolSettings->persist_chat_visibility(ChatVisibility::Shown);
                     return;
                 }
+            });
+
+        BOOL_OPTION("Large Font:", large_font);
+
+        nav.add_row(
+            "Shown to:",
+            [] {
+                switch (EolSettings->shown_to_persisted()) {
+                case ShownTo::Everyone:
+                    return "Everyone";
+                case ShownTo::Team:
+                    return "Team";
+                case ShownTo::Nobody:
+                    return "Nobody";
+                }
+                return "";
+            }(),
+            NAV_FUNC() {
+                switch (EolSettings->shown_to_persisted()) {
+                case ShownTo::Everyone:
+                    EolSettings->persist_shown_to(ShownTo::Team);
+                    break;
+                case ShownTo::Team:
+                    EolSettings->persist_shown_to(ShownTo::Nobody);
+                    break;
+                case ShownTo::Nobody:
+                    EolSettings->persist_shown_to(ShownTo::Everyone);
+                    break;
+                }
+                EolClient->announce_shown_to();
             });
 
         nav.add_row(

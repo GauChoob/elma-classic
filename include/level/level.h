@@ -1,12 +1,13 @@
-#ifndef LEVEL_H
-#define LEVEL_H
+#ifndef LEVEL_LEVEL_H
+#define LEVEL_LEVEL_H
 
 #include "game/state.h"
 #include "vect2.h"
+#include <filesystem>
 #include <optional>
+#include <string_view>
 
 class lgrfile;
-struct motorst;
 class object;
 class polygon;
 class sprite;
@@ -22,6 +23,7 @@ constexpr int LEVEL_NAME_LENGTH_OLD = 14;
 class level {
     double checksum();
     void from_file(const char* filename, bool internal);
+    std::filesystem::file_time_type file_last_write_time;
 
   public:
     int level_id;
@@ -36,6 +38,8 @@ class level {
 
     topten_set toptens;
     int topten_file_offset; // 0 if internal level
+
+    vect2 start_position;
 
     // Create a default level
     level();
@@ -61,6 +65,7 @@ class level {
                             object** obj, sprite** spr);
 
     void save(const char* filename, bool skip_topology = false);
+    bool file_has_changed(const char* filename) const;
     // Update top ten of an external level
     void save_topten(const char* filename);
     // Render the level in the internal editor.
@@ -69,9 +74,9 @@ class level {
     bool is_sky(polygon* poly, vect2* point = nullptr);
     // Get the min/max dimensions of level, optionally including objects/sprites
     void get_boundaries(double* x1, double* y1, double* x2, double* y2,
-                        bool check_objects_and_sprites);
+                        bool check_objects_and_sprites) const;
     // Returns apple count.
-    int initialize_objects(motorst* mot);
+    int initialize_objects();
     void sort_objects();
     object* get_object(int index);
 
@@ -84,8 +89,6 @@ class level {
     int crc() const;
 };
 
-extern vect2 BikeStartOffset;
-
 // Return true if level exists. Internal levels always exist.
 bool level_file_exists(const char* filename);
 
@@ -96,8 +99,8 @@ extern char BestTime[30];
 // Store the best time of the level to display while doing a run
 void load_best_time(const char* filename, int single);
 
-// Get the internal index (1-55) of a filename if it has the form "QWQUU###.LEV", case
-// insensitive, ### can be any digits.
-std::optional<int> get_internal_index(const char* filename);
+// Get the internal index (1-55) of a filename if it has the form "QWQUU###", with or without a
+// ".LEV" extension, case insensitive, ### can be any digits.
+std::optional<int> get_internal_index(std::string_view filename);
 
 #endif

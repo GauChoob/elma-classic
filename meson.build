@@ -10,7 +10,13 @@ if get_option('profile_performance') == true
     add_project_arguments('-DPROFILE_PERFORMANCE', language: 'cpp')
 endif
 
+if get_option('curl_verbose') == true
+    add_project_arguments('-DCURL_VERBOSE', language: 'cpp')
+endif
+
 elma_sources = files(
+    'src/api/api.cpp',
+    'src/api/curl_wrapper.cpp',
     'src/debug/profiler.cpp',
     'src/editor/canvas.cpp',
     'src/editor/dialog.cpp',
@@ -21,15 +27,19 @@ elma_sources = files(
     'src/editor/topology.cpp',
     'src/editor/window.cpp',
     'src/eol/battle.cpp',
+    'src/eol/checkpoint.cpp',
+    'src/eol/clickable.cpp',
     'src/eol/console.cpp',
     'src/eol/eol_table.cpp',
     'src/eol/eol.cpp',
     'src/eol/kuski.cpp',
     'src/eol/settings.cpp',
     'src/eol/status_messages.cpp',
+    'src/game/camera.cpp',
     'src/game/driver.cpp',
     'src/game/fps.cpp',
     'src/game/game.cpp',
+    'src/game/input.cpp',
     'src/game/level_load.cpp',
     'src/game/qopen.cpp',
     'src/game/recorder.cpp',
@@ -121,19 +131,138 @@ else
     cpp_args += ['-Wno-deprecated-declarations', '-Wunreachable-code']
 endif
 
-sdl2_dep = dependency('sdl2',
-    static: build_machine.system() == 'windows' or get_option('static_sdl'),
+gl_dep = dependency('gl', required: true)
+
+libcurl_dep = dependency('libcurl',
+    version : '>=8.12.1',
+    include_type: 'system',
+    static: build_machine.system() == 'windows',
     default_options: {
-        'test': false,
-        'with_main': false,
+        # See meson_options.txt, meson.build, CURL-DISABLE.md and INSTALL-CMAKE.md in libcurl
+        # See also https://curl.se/libcurl/c/curl_version_info.html
+
+        # In order of meson_options.txt:
+
+        # Build
+        'tests': 'disabled',
+        'unittests': 'disabled',
+        'tool': 'disabled',
+
+        # CA
+        'ca_bundle': 'auto', # Linux
+        'ca_path': 'auto', # Linux
+        'ca_fallback': false,
+
+        # Features
+        'bindlocal': 'disabled', # CURLOPT_INTERFACE
+        'brotli': 'disabled', # CURLOPT_ACCEPT_ENCODING
+        'cookies': 'enabled',
+        'doh': 'disabled', # CURLOPT_DOH_URL
+        'form-api': 'disabled', # deprecated curl_formadd()/curl_formget()
+        'getoptions': 'disabled', # curl_easy_option_by_name()/curl_easy_option_by_id()
+        'gsasl': 'disabled', # IMAP/SMTP auth - https://gitlab.com/gsasl/gsasl
+        'http2': 'auto', # missing .wrap file on Windows https://github.com/nghttp2/nghttp2
+        'ipv6': 'disabled',
+        'libcurl-option': 'disabled', # curl --libcurl file.c https://example.com
+        'libz': 'disabled', # CURLOPT_ACCEPT_ENCODING
+        'mime': 'enabled', # Mime Headers
+        'netrc': 'disabled', # CURLOPT_NETRC
+        'parsedate': 'disabled', # curl_getdate()
+        'progress-meter': 'disabled', # command-line progress meter
+        'proxy': 'disabled', # CURLOPT_PROXY
+        'psl': 'disabled', # https://publicsuffix.org/, https://curl.se/libcurl/security.html
+        'sha512_256': 'disabled', # only used in CURLAUTH_DIGEST
+        'shuffle-dns': 'disabled', # CURLOPT_DNS_SHUFFLE_ADDRESSES
+        'socketpair': 'enabled', # curl_multi_poll()
+        'sspi': build_machine.system() == 'windows' ? 'enabled' : 'disabled', # required for Schannel (SSL)
+        'unixsockets': 'disabled', # CURLOPT_UNIX_SOCKET_PATH
+        'verbose-strings': 'enabled', # Error messages
+        'websockets': 'disabled', # API: Websocket
+        'zstd': 'disabled', # CURLOPT_ACCEPT_ENCODING
+
+        # Asynchronous DNS
+        'asynchdns': 'enabled', # faster multi interface
+
+        # Authentication
+        'aws': 'disabled',
+        'basic-auth': 'disabled',
+        'bearer-auth': 'disabled',
+        'digest-auth': 'disabled',
+        'kerberos-auth': 'disabled',
+        'negotiate-auth': 'disabled',
+
+        # GSS API
+        'gss-api': 'disabled',
+
+        # IDN
+        'idn': 'disabled', # Internationalized domain name
+
+        # HTTP
+        'alt-svc': 'disabled', # elma.online provides HTTP3 via alt-svc, but HTTP3 is not currently supported in 8.12.1 via meson.build
+        'headers-api': 'enabled', # curl_easy_header()
+        'hsts': 'disabled', # CURLOPT_HSTS_CTRL
+        'http-auth': 'disabled', # CURLOPT_HTTPAUTH
+
+        # NTLM
+        'ntlm': 'disabled',
+
+        # SSH
+        'ssh': 'disabled',
+
+        # SSL
+        'ssl': 'enabled',
+        'tls-srp': 'disabled', # deprecated CURLOPT_TLSAUTH_TYPE
+
+        # Protocols
+        'dict': 'disabled',
+        'file': 'disabled',
+        'ftp': 'disabled',
+        'gopher': 'disabled',
+        'http': 'enabled',
+        'imap': 'disabled',
+        'ipfs': 'disabled',
+        'ldap': 'disabled',
+        'ldaps': 'disabled',
+        'mqtt': 'disabled',
+        'pop3': 'disabled',
+        'rtmp': 'disabled',
+        'rtsp': 'disabled',
+        'smb': 'disabled',
+        'smtp': 'disabled',
+        'telnet': 'disabled',
+        'tftp': 'disabled',
     }
 )
 
-gl_dep = dependency('gl', required: true)
-
 nlohmann_json_dep = dependency('nlohmann_json')
 
-deps += [nlohmann_json_dep, gl_dep, sdl2_dep]
+sdl2_dep = dependency('sdl2',
+    static: build_machine.system() == 'windows' or get_option('static_sdl'),
+    default_options: {
+        # See this overview: https://wiki.libsdl.org/SDL3/QuickReference
+        # Also see SDL's meson_options.txt
+        'test': false,
+        'with_main': false,
+
+        # Uninitialized subsystems (https://wiki.libsdl.org/SDL2/SDL_Init)
+        'use_sensor': 'disabled',
+        'use_haptic': 'disabled',
+        'use_joystick': 'disabled',
+        'use_joystick_dinput': 'disabled',
+        'use_joystick_virtual': 'disabled',
+        'use_joystick_wgi': 'disabled',
+        'use_joystick_xinput': 'disabled',
+
+        # Unused hidden subsystems (#define SDL_SUBSYSTEM_DISABLED)
+        'use_cpuinfo': 'disabled', # https://wiki.libsdl.org/SDL2/CategoryCPUInfo
+        'use_filesystem': 'disabled', # https://wiki.libsdl.org/SDL2/CategoryFilesystem
+        'use_hidapi': 'disabled', # Bluetooth, https://wiki.libsdl.org/SDL2/CategoryHIDAPI
+        'use_locale': 'disabled', # https://wiki.libsdl.org/SDL2/CategoryLocale
+        'use_power': 'disabled', # https://wiki.libsdl.org/SDL2/CategoryPower
+    }
+)
+
+deps += [gl_dep, libcurl_dep, nlohmann_json_dep, sdl2_dep]
 
 executable(
     'elma',
@@ -143,4 +272,47 @@ executable(
     link_args: link_args,
     dependencies: deps,
     win_subsystem: win_subsystem,
+)
+
+clang_tidy = find_program('clang-tidy', 'clang-tidy-21', required: false)
+lint_files = run_command('git', '-C', meson.project_source_root(), 'ls-files', '*.cpp', '*.c', 'include/*.h', check: false)
+if clang_tidy.found() and lint_files.returncode() == 0
+    clang_tidy_args = ['--allow-no-checks', '--warnings-as-errors=*', '-quiet', '-p', meson.project_build_root()]
+
+    # clang-cl rejects the debug CRT together with -fsanitize=address, so
+    # analyze with the release CRT (last /M flag wins). Appending extra args
+    # also leaves /c unused, which must not count as a finding.
+    if cpp.get_id() in ['msvc', 'clang-cl']
+        clang_tidy_args += ['--extra-arg=/MD', '--extra-arg=-Qunused-arguments']
+    endif
+
+    # Homebrew clang-tidy doesn't know where the Xcode SDK lives
+    if host_machine.system() == 'darwin'
+        sdk_path = run_command('xcrun', '--show-sdk-path', check: false)
+        if sdk_path.returncode() == 0
+            clang_tidy_args += '--extra-arg=-isysroot' + sdk_path.stdout().strip()
+        endif
+    endif
+
+    foreach f : lint_files.stdout().strip().split('\n')
+        test(
+            f,
+            clang_tidy,
+            args: clang_tidy_args + [meson.project_source_root() / f],
+            suite: 'clang-tidy',
+            timeout: 90,
+        )
+    endforeach
+endif
+
+python = import('python').find_installation()
+test(
+    'settings::reset_keys()',
+    python,
+    args: [files(
+        'tests/test_reset_keys.py',
+        'include/eol/settings.h',
+        'src/eol/settings.cpp'
+    )],
+    suite: 'tests'
 )

@@ -19,7 +19,7 @@ state* State = nullptr;
 
 static void read_encrypted(void* buffer, int length, FILE* h, const char* filename) {
     if (fread(buffer, 1, length, h) != length) {
-        external_error(std::string("Corrupt file, please delete it! ") + filename);
+        internal_error(std::string("Corrupt file, please delete it! ") + filename);
     }
     unsigned char* pc = (unsigned char*)buffer;
     short a = 23;
@@ -97,7 +97,7 @@ state::state(const char* filename) {
     int version = 0;
     read_encrypted(&version, sizeof(version), h, filename);
     if (version != STATE_VERSION) {
-        external_error(std::string("File version is incorrect! Please rename it! ") + filename);
+        internal_error(std::string("File version is incorrect! Please rename it! ") + filename);
     }
     read_encrypted(toptens, sizeof(toptens), h, filename);
     read_encrypted(players, sizeof(players), h, filename);
@@ -122,11 +122,11 @@ state::state(const char* filename) {
 
     int magic_number = 0;
     if (fread(&magic_number, 1, sizeof(magic_number), h) != sizeof(magic_number)) {
-        external_error(std::string("Corrupt file, please rename it! ") + filename);
+        internal_error(std::string("Corrupt file, please rename it! ") + filename);
     }
     if (magic_number != STATE_MAGICNUMBER_SHAREWARE &&
         magic_number != STATE_MAGICNUMBER_REGISTERED) {
-        external_error(std::string("Corrupt file, please rename it! ") + filename);
+        internal_error(std::string("Corrupt file, please rename it! ") + filename);
     }
     fclose(h);
 }
@@ -144,7 +144,7 @@ void state::reload_toptens() {
     int version = 0;
     read_encrypted(&version, 4, h, filename);
     if (version != STATE_VERSION) {
-        external_error(std::string("File version is incorrect! Please rename it! ") + filename);
+        internal_error(std::string("File version is incorrect! Please rename it! ") + filename);
     }
 
     read_encrypted(toptens, sizeof(toptens), h, filename);
@@ -155,7 +155,7 @@ void state::reload_toptens() {
 void state::save() {
     FILE* h = fopen(STATE_FILENAME, "wb");
     if (!h) {
-        external_error(std::string("Could not open for write file!: ") + STATE_FILENAME);
+        internal_error(std::string("Could not open for write file!: ") + STATE_FILENAME);
     }
 
     int version = STATE_VERSION;
@@ -322,7 +322,7 @@ void state::write_stats_player_total_time(FILE* h, const char* player_name, bool
 void state::write_stats() {
     FILE* h = fopen("stats.txt", "w");
     if (!h) {
-        external_error("Could not open STATS.TXT for writing!");
+        internal_error("Could not open STATS.TXT for writing!");
     }
 
     fprintf(h, "This text file is generated automatically each time you quit the\n");
@@ -416,40 +416,6 @@ void state::reset_keys() {
     key_increase_screen_size = DIK_EQUALS;
     key_decrease_screen_size = DIK_MINUS;
     key_screenshot = DIK_I;
-    key_escape_alias = EolSettings->escape_alias_key_default();
-
-    key_replay_fast_2x = EolSettings->replay_fast_2x_key_default();
-    key_replay_fast_4x = EolSettings->replay_fast_4x_key_default();
-    key_replay_fast_8x = EolSettings->replay_fast_8x_key_default();
-    key_replay_slow_2x = EolSettings->replay_slow_2x_key_default();
-    key_replay_slow_4x = EolSettings->replay_slow_4x_key_default();
-    key_replay_pause = EolSettings->replay_pause_key_default();
-    key_replay_rewind = EolSettings->replay_rewind_key_default();
-
-    key_show_others = EolSettings->show_others_key_default();
-    key_spy_next_kuski = EolSettings->spy_next_kuski_key_default();
-    key_spy_prev_kuski = EolSettings->spy_prev_kuski_key_default();
-    key_battle_queue = EolSettings->battle_queue_key_default();
-    key_download_battle_level = EolSettings->download_battle_level_key_default();
-    key_download_level = EolSettings->download_level_key_default();
-    key_players_online = EolSettings->players_online_key_default();
-    key_battle_results = EolSettings->battle_results_key_default();
-    key_finished_times = EolSettings->finished_times_key_default();
-    key_cycle_finished_times_filter = EolSettings->cycle_finished_times_filter_key_default();
-    key_clear_finished_times = EolSettings->clear_finished_times_key_default();
-    key_chat = EolSettings->chat_key_default();
-    key_show_chat = EolSettings->show_chat_key_default();
-    key_team_chat = EolSettings->team_chat_key_default();
-    key_pm_next_kuski = EolSettings->pm_next_kuski_key_default();
-    key_pm_prev_kuski = EolSettings->pm_prev_kuski_key_default();
-    key_pm_clear_kuski = EolSettings->pm_clear_kuski_key_default();
-    key_battle_status = EolSettings->battle_status_key_default();
-    key_battle_leader = EolSettings->battle_leader_key_default();
-    key_speedometer = EolSettings->speedometer_key_default();
-    key_reconnect = EolSettings->reconnect_key_default();
-    key_disconnect = EolSettings->disconnect_key_default();
-    key_toggle_one_wheel_status = EolSettings->toggle_one_wheel_status_key_default();
-    key_toggle_last_apple_time = EolSettings->toggle_last_apple_time_key_default();
 }
 
 player* state::get_player(const char* player_name) {
@@ -623,7 +589,7 @@ void merge_states() {
 
     state* mrg = new state(MERGE_DAT);
     if (!mrg) {
-        external_error("memory");
+        internal_error("memory");
     }
 
     State->reload_toptens();
