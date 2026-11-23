@@ -1,75 +1,34 @@
 #include "main.h"
-#include "editor/canvas.h"
-#include "eol/eol.h"
-#include "eol/settings.h"
+#include "api/api.h"
 #include "log.h"
 #include "menu/intro.h"
 #include "menu/pic.h"
-#include "pic/surface.h"
 #include "platform/implementation.h"
 #include "platform/scancode.h"
-#include "util/util.h"
 #include <cstdlib>
 #include <string>
 
-static double StopwatchStartTime = 0.0;
+int main() { menu_intro(); }
 
-double stopwatch() { return get_milliseconds() * STOPWATCH_MULTIPLIER - StopwatchStartTime; }
-
-void stopwatch_reset() { StopwatchStartTime = get_milliseconds() * STOPWATCH_MULTIPLIER; }
-
-void delay(int milliseconds) {
-    double current_time = stopwatch();
-    while (stopwatch() / STOPWATCH_MULTIPLIER <
-           current_time / STOPWATCH_MULTIPLIER + milliseconds) {
-        handle_events();
-    }
+void quit() {
+    eol_api::cleanup();
+    exit(0);
 }
 
-eol_settings* EolSettings = nullptr;
-eol* EolClient = nullptr;
-
-int main() {
-    util::random::seed();
-
-    EolSettings = new eol_settings();
-    eol_settings::read_settings();
-
-    SCREEN_WIDTH = EolSettings->screen_width();
-    SCREEN_HEIGHT = EolSettings->screen_height();
-    editor_canvas_update_resolution();
-
-    platform_init();
-
-    EolClient = new eol();
-    EolClient->connect();
-
-    menu_intro();
-}
-
-void quit() { exit(0); }
-
-bool ErrorGraphicsLoaded = false;
-
-[[noreturn]] static void handle_error(const std::string& prefix, const std::string& message,
-                                      std::source_location loc) {
+void internal_error(const std::string& message, std::source_location loc) {
     static bool InError = false;
-    logger::instance().write(LogLevel::Fatal, loc, std::format("{} {}", prefix, message));
+    logger::instance().write(LogLevel::Fatal, loc,
+                             std::format("Sorry, internal error. {}", message));
 
     if (InError) {
         message_box("A fatal error occurred. Details written to eol.log.");
-        quit();
+        exit(1);
     }
     InError = true;
 
-    std::string text = prefix + "\n" + message;
+    std::string text = "Sorry, internal error.\n" + message;
 
-    bool rendered = false;
-    if (ErrorGraphicsLoaded) {
-        render_error(text);
-        rendered = platform_render_error(BufferMain);
-    }
-    if (rendered) {
+    if (render_error(text) && platform_render_error(BufferMain)) {
         while (true) {
             handle_events();
             if (was_key_just_pressed(DIK_ESCAPE) || was_key_just_pressed(DIK_RETURN) ||
@@ -82,16 +41,4 @@ bool ErrorGraphicsLoaded = false;
     }
 
     quit();
-}
-
-void internal_error(const std::string& message, std::source_location loc) {
-    handle_error("Sorry, internal error.", message, loc);
-}
-
-void external_error(const std::string& message, std::source_location loc) {
-    if (message.find("memory") != std::string::npos) {
-        handle_error("Sorry, out of memory!", message, loc);
-    } else {
-        handle_error("External error encountered:", message, loc);
-    }
 }

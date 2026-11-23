@@ -2,11 +2,22 @@
 #define EOL_TYPES_H
 
 #include "level/level.h"
-#include "main.h"
+#include "util/util.h"
 #include <cstdint>
 #include <optional>
 
-enum class TableType { None, PlayersOnline, BattleResults, BattleQueue, FinishedTimes };
+enum class TableType {
+    None,
+    PlayersOnline,
+    BattleResults,
+    BattleQueue,
+    FinishedTimes,
+    FinishedMultiTimes,
+    BestTimes,
+};
+
+// How a level is being shown to the kuski
+enum class EnterMode { Play, Spy, Replay, Editor };
 
 enum class BattleType : uint8_t {
     Normal = 0,
@@ -38,8 +49,8 @@ enum Kind : uint16_t {
     Uploaded = 1 << 11,
     OneWheel = 1 << 12,
     Multi = 1 << 13,
-    CrippleMask =
-        NoVolt | NoTurn | OneTurn | NoBrake | NoThrottle | AlwaysThrottle | Drunk | OneWheel,
+    CrippleMask = NoVolt | NoTurn | OneTurn | NoBrake | NoThrottle | AlwaysThrottle | Drunk |
+        OneWheel,
 };
 }
 

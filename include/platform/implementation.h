@@ -22,7 +22,8 @@ bool platform_render_error(pic8* buffer);
 void handle_events();
 
 void platform_init();
-void init_sound();
+void open_sound_device();
+void close_sound_device();
 
 void lock_backbuffer(pic8& view, bool flipped);
 void unlock_backbuffer();
@@ -30,6 +31,7 @@ void unlock_backbuffer();
 void get_mouse_position(int* x, int* y);
 void set_mouse_position(int x, int y);
 bool was_left_mouse_just_clicked();
+bool was_middle_mouse_just_clicked();
 bool was_right_mouse_just_clicked();
 void show_cursor();
 void hide_cursor();
@@ -41,7 +43,8 @@ std::string get_clipboard_text();
 bool is_fullscreen();
 long long get_milliseconds();
 
-void platform_apply_fullscreen_mode();
+// Returns true if the resolution changed; the caller must run on_resolution_change().
+bool platform_apply_fullscreen_mode();
 std::vector<std::pair<int, int>> platform_get_display_modes();
 std::pair<int, int> platform_get_desktop_resolution();
 
@@ -49,5 +52,8 @@ void platform_resize_window(int width, int height);
 void platform_recreate_window();
 bool has_window();
 bool platform_save_screenshot();
+
+void enable_screensaver();
+void disable_screensaver();
 
 #endif

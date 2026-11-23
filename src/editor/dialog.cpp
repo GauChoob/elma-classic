@@ -176,6 +176,7 @@ int dialog(const char* text1, const char* text2, const char* text3, const char* 
     // Await input
     int choice = 0;
     // Immediate exit if DIALOG_RETURN
+    screen.blit_to_screen();
     while (!immediately_return) {
         handle_events();
         screen.blit_to_screen();
@@ -218,4 +219,21 @@ exit:
         show_cursor();
     }
     return choice;
+}
+
+void dialog_switch_palette() {
+    blit8(BufferBall, BufferMain);
+    BufferMain->fill_box(EditorPaletteId::BACKGROUND);
+    blit_to_screen(BufferMain);
+    if (!InEditor) {
+        EditorPalette->set();
+    }
+}
+
+void dialog_restore_palette() {
+    if (!InEditor) {
+        MenuPalette->set();
+        blit8(BufferMain, BufferBall);
+        blit_to_screen(BufferMain);
+    }
 }

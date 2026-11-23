@@ -1,9 +1,8 @@
-#ifndef SPRITE_H
-#define SPRITE_H
+#ifndef LEVEL_SPRITE_H
+#define LEVEL_SPRITE_H
 
 #include "vect2.h"
 #include <cstdio>
-#include <string>
 
 constexpr int DEFAULT_SPRITE_WIREFRAME = 20;
 

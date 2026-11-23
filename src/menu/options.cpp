@@ -1,8 +1,6 @@
 #include "menu/options.h"
 #include "eol/settings.h"
-#include "game/level_load.h"
 #include "game/state.h"
-#include "main.h"
 #include "menu/ball.h"
 #include "menu/controls.h"
 #include "menu/dialog.h"
@@ -11,6 +9,7 @@
 #include "menu/player.h"
 #include "pic/surface.h"
 #include "platform/implementation.h"
+#include "renderer/canvas.h"
 #include "util/file_iter.h"
 #include <cmath>
 #include <cstring>
@@ -45,6 +44,7 @@ void menu_about() {
     // Alphabetical
     nav.add_row("amarshalov", "", NAV_FUNC(){});
     nav.add_row("Smibu", "", NAV_FUNC(){});
+    nav.add_row("Zweq", "", NAV_FUNC(){});
 
     nav.navigate();
 
@@ -183,6 +183,57 @@ static void menu_fullscreen() {
         text, EolSettings->setting##_persisted() ? "Yes" : "No",                                   \
         NAV_FUNC() { EolSettings->persist_##setting(!EolSettings->setting##_persisted()); });
 
+#define INT_OPTION(text, setting, prompt, max_len)                                                 \
+    nav.add_row(                                                                                   \
+        text, std::to_string(EolSettings->setting##_persisted()), NAV_FUNC() {                     \
+            auto val = menu_prompt_int(prompt, std::to_string(EolSettings->setting##_persisted()), \
+                                       max_len);                                                   \
+            if (!val) {                                                                            \
+                return;                                                                            \
+            }                                                                                      \
+            EolSettings->persist_##setting(*val);                                                  \
+        });
+
+#define DOUBLE_OPTION(text, setting, prompt, form, max_len)                                        \
+    nav.add_row(                                                                                   \
+        text, std::format(form, EolSettings->setting##_persisted()), NAV_FUNC() {                  \
+            auto val = menu_prompt_double(                                                         \
+                prompt, std::format(form, EolSettings->setting##_persisted()), max_len);           \
+            if (!val) {                                                                            \
+                return;                                                                            \
+            }                                                                                      \
+            EolSettings->persist_##setting(*val);                                                  \
+        });
+
+template <typename Enum, std::size_t N>
+const char* enum_name(Enum value, const std::array<std::pair<Enum, const char*>, N>& options) {
+    for (const auto& [option, name] : options) {
+        if (option == value) {
+            return name;
+        }
+    }
+    return "?";
+}
+
+template <typename Enum, std::size_t N, typename Persist>
+void cycle_enum(Enum current, const std::array<std::pair<Enum, const char*>, N>& options,
+                const Persist& persist) {
+    for (std::size_t i = 0; i < N; ++i) {
+        if (options[i].first == current) {
+            persist(options[(i + 1) % N].first);
+            return;
+        }
+    }
+    persist(options[0].first);
+}
+
+#define ENUM_OPTION(text, setting, options)                                                        \
+    nav.add_row(                                                                                   \
+        text, enum_name(EolSettings->setting##_persisted(), options), NAV_FUNC() {                 \
+            cycle_enum(EolSettings->setting##_persisted(), options,                                \
+                       [](auto val) { EolSettings->persist_##setting(val); });                     \
+        });
+
 static void menu_cripples() {
     int choice = 0;
     while (true) {
@@ -237,8 +288,15 @@ void menu_options() {
         nav.add_row("Player B:", State->player2, NAV_FUNC() { menu_player_choose(false, true); });
 
         nav.add_row(
-            "Sound:", State->sound_on ? "Enabled" : "Disabled",
-            NAV_FUNC() { State->sound_on = !State->sound_on; });
+            "Sound:", State->sound_on ? "Enabled" : "Disabled", NAV_FUNC() {
+                if (State->sound_on) {
+                    close_sound_device();
+                    State->sound_on = 0;
+                } else {
+                    open_sound_device();
+                    State->sound_on = 1;
+                }
+            });
 
         nav.add_row(
             "Animated Menus:", State->animated_menus ? "Yes" : "No",
@@ -247,7 +305,7 @@ void menu_options() {
         nav.add_row(
             "Video Detail:", State->high_quality ? "High" : "Low", NAV_FUNC() {
                 State->high_quality = !State->high_quality;
-                invalidate_level();
+                canvas::invalidate_canvases();
             });
 
         nav.add_row(
@@ -266,13 +324,7 @@ void menu_options() {
 
         nav.add_row("Cripples ...", NAV_FUNC() { menu_cripples(); });
 
-        nav.add_row(
-            "Pics In Background:", EolSettings->pictures_in_background_persisted() ? "Yes" : "No",
-            NAV_FUNC() {
-                EolSettings->persist_pictures_in_background(
-                    !EolSettings->pictures_in_background_persisted());
-                invalidate_level();
-            });
+        BOOL_OPTION("Pics In Background:", pictures_in_background);
 
         BOOL_OPTION("Override Ground:", default_ground);
         BOOL_OPTION("Override Sky:", default_sky);
@@ -280,37 +332,30 @@ void menu_options() {
         BOOL_OPTION("Centered Camera:", center_camera);
         BOOL_OPTION("Centered Minimap:", center_map);
 
-        nav.add_row(
-            "Minimap Alignment:",
-            [] {
-                switch (EolSettings->map_alignment_persisted()) {
-                case MapAlignment::None:
-                    return "None";
-                case MapAlignment::Left:
-                    return "Left";
-                case MapAlignment::Middle:
-                    return "Middle";
-                case MapAlignment::Right:
-                    return "Right";
-                }
-                return "";
-            }(),
-            NAV_FUNC() {
-                switch (EolSettings->map_alignment_persisted()) {
-                case MapAlignment::None:
-                    EolSettings->persist_map_alignment(MapAlignment::Left);
-                    return;
-                case MapAlignment::Left:
-                    EolSettings->persist_map_alignment(MapAlignment::Middle);
-                    return;
-                case MapAlignment::Middle:
-                    EolSettings->persist_map_alignment(MapAlignment::Right);
-                    return;
-                case MapAlignment::Right:
-                    EolSettings->persist_map_alignment(MapAlignment::None);
-                    return;
-                }
-            });
+// macro to keep the player A and player B default show_X settings in sync
+#define SHOW_X_OPTION(name, setting)                                                               \
+    nav.add_row(                                                                                   \
+        name, EolSettings->setting##_player_a_persisted() ? "Yes" : "No", NAV_FUNC() {             \
+            EolSettings->persist_##setting##_player_a(                                             \
+                !EolSettings->setting##_player_a_persisted());                                     \
+            EolSettings->persist_##setting##_player_b(                                             \
+                EolSettings->setting##_player_a_persisted());                                      \
+        });
+
+        SHOW_X_OPTION("Show Timer", show_timer);
+        SHOW_X_OPTION("Show Minimap", show_minimap);
+        SHOW_X_OPTION("Show Replay Timer", show_replay_timer);
+        SHOW_X_OPTION("Show Replay Minimap", show_replay_minimap);
+
+#undef SHOW_X_OPTION
+
+        static constexpr std::array MAP_ALIGNMENT{
+            std::pair{MapAlignment::None, "None"},
+            std::pair{MapAlignment::Left, "Left"},
+            std::pair{MapAlignment::Middle, "Middle"},
+            std::pair{MapAlignment::Right, "Right"},
+        };
+        ENUM_OPTION("Minimap Alignment:", map_alignment, MAP_ALIGNMENT);
 
         nav.add_row(
             "Minimap Size:",
@@ -366,50 +411,19 @@ void menu_options() {
                 menu_resolution();
             });
 
-        nav.add_row(
-            "Zoom:", std::format("{:.2f}", EolSettings->zoom_persisted()), NAV_FUNC() {
-                double old_zoom = EolSettings->zoom_persisted();
-                EolSettings->persist_zoom(old_zoom + 0.25);
-                if (old_zoom == EolSettings->zoom_persisted()) {
-                    EolSettings->persist_zoom(0.25);
-                }
-            });
+        DOUBLE_OPTION("Zoom:", zoom, "Enter Zoom", "{:.2f}", 5);
 
-        nav.add_row(
-            "Minimap Zoom:", std::format("{:.2f}", EolSettings->minimap_zoom_persisted()),
-            NAV_FUNC() {
-                double old_zoom = EolSettings->minimap_zoom_persisted();
-                EolSettings->persist_minimap_zoom(old_zoom + 0.25);
-                if (old_zoom == EolSettings->minimap_zoom_persisted()) {
-                    EolSettings->persist_minimap_zoom(0.25);
-                }
-            });
+        DOUBLE_OPTION("Minimap Zoom:", minimap_zoom, "Enter Minimap Zoom", "{:.2f}", 5);
 
         BOOL_OPTION("Zoom Textures:", zoom_textures);
 
         BOOL_OPTION("Zoom Grass:", zoom_grass);
 
-        nav.add_row(
-            "Renderer:",
-            [] {
-                switch (EolSettings->renderer_persisted()) {
-                case RendererType::Software:
-                    return "Software";
-                case RendererType::OpenGL:
-                    return "OpenGL";
-                }
-                return "";
-            }(),
-            NAV_FUNC() {
-                switch (EolSettings->renderer_persisted()) {
-                case RendererType::Software:
-                    EolSettings->persist_renderer(RendererType::OpenGL);
-                    return;
-                case RendererType::OpenGL:
-                    EolSettings->persist_renderer(RendererType::Software);
-                    return;
-                }
-            });
+        static constexpr std::array RENDERER{
+            std::pair{RendererType::Software, "Software"},
+            std::pair{RendererType::OpenGL, "OpenGL"},
+        };
+        ENUM_OPTION("Renderer:", renderer, RENDERER);
 
         nav.add_row(
             "Fullscreen:", fullscreen_mode_label(EolSettings->fullscreen_persisted()),
@@ -440,6 +454,7 @@ void menu_options() {
         BOOL_OPTION("Fancyboost LGRs:", fancyboost);
 
         BOOL_OPTION("Show Apple Time:", show_last_apple_time);
+        BOOL_OPTION("Show Lev Name In Rec:", show_lev_name_in_rec);
         BOOL_OPTION("Gravity Arrows:", show_gravity_arrows);
 
         BOOL_OPTION("Show FPS:", show_fps);
@@ -468,20 +483,12 @@ void menu_options() {
                 EolSettings->persist_fps_limit(steps[0]);
             });
 
-        nav.add_row(
-            "Record Replay FPS:", std::to_string(EolSettings->recording_fps_persisted()),
-            NAV_FUNC() {
-                int old_fps = EolSettings->recording_fps_persisted();
-                int new_fps;
-                if (old_fps == 30) {
-                    new_fps = 60;
-                } else if (old_fps == 60) {
-                    new_fps = 120;
-                } else {
-                    new_fps = 30;
-                }
-                EolSettings->persist_recording_fps(new_fps);
-            });
+        INT_OPTION("FPS Limit Key +/-:", fps_limit_step,
+                   "Every time you press the -/+ FPS keys,\n"
+                   "the FPS will change by this amount on the next run.",
+                   3);
+
+        INT_OPTION("Record Replay FPS:", recording_fps, "Enter Record Replay FPS", 4);
 
         BOOL_OPTION("Show Total Time:", show_total_time);
         BOOL_OPTION("Demo menu:", show_demo_menu);
@@ -490,73 +497,35 @@ void menu_options() {
         BOOL_OPTION("Best Times menu:", show_best_times_menu);
         BOOL_OPTION("Skip Intro:", skip_intro);
 
-        nav.add_row(
-            "Show chat:",
-            [] {
-                switch (EolSettings->chat_visibility_persisted()) {
-                case ChatVisibility::Shown:
-                    return "Yes";
-                case ChatVisibility::PublicHidden:
-                    return "Public hidden";
-                case ChatVisibility::Hidden:
-                    return "No";
-                }
-                return "";
-            }(),
-            NAV_FUNC() {
-                switch (EolSettings->chat_visibility_persisted()) {
-                case ChatVisibility::Shown:
-                    EolSettings->persist_chat_visibility(ChatVisibility::PublicHidden);
-                    return;
-                case ChatVisibility::PublicHidden:
-                    EolSettings->persist_chat_visibility(ChatVisibility::Hidden);
-                    return;
-                case ChatVisibility::Hidden:
-                    EolSettings->persist_chat_visibility(ChatVisibility::Shown);
-                    return;
-                }
-            });
+        static constexpr std::array SHOW_CHAT{
+            std::pair{ChatVisibility::Shown, "Shown"},
+            std::pair{ChatVisibility::PublicHidden, "Public hidden"},
+            std::pair{ChatVisibility::Hidden, "No"},
+        };
+        ENUM_OPTION("Show chat:", chat_visibility, SHOW_CHAT);
 
-        nav.add_row(
-            "Num Chat Lines:", std::format("{}", EolSettings->chat_lines_persisted()), NAV_FUNC() {
-                int old_chat_lines = EolSettings->chat_lines_persisted();
-                EolSettings->persist_chat_lines(old_chat_lines + 1);
-                if (old_chat_lines == EolSettings->chat_lines_persisted()) {
-                    EolSettings->persist_chat_lines(1);
-                }
-            });
+        BOOL_OPTION("Large Font:", large_font);
+
+        static constexpr std::array SHOWN_TO{
+            std::pair{ShownTo::Everyone, "Everyone"},
+            std::pair{ShownTo::Team, "Team"},
+            std::pair{ShownTo::Nobody, "Nobody"},
+        };
+        ENUM_OPTION("Shown to:", shown_to, SHOWN_TO);
+
+        INT_OPTION("Num Chat Lines:", chat_lines, "Enter Number of Chat Lines", 2);
 
         BOOL_OPTION("Show others:", show_others);
         BOOL_OPTION("Show battle status:", show_battle_status);
         BOOL_OPTION("Show battle leader:", show_battle_leader);
         BOOL_OPTION("Show speedometer:", show_speedometer);
 
-        nav.add_row(
-            "Table Alignment:",
-            [] {
-                switch (EolSettings->table_alignment_persisted()) {
-                case eol_table::Align::Left:
-                    return "Left";
-                case eol_table::Align::Center:
-                    return "Center";
-                case eol_table::Align::Right:
-                    return "Right";
-                }
-                return "";
-            }(),
-            NAV_FUNC() {
-                switch (EolSettings->table_alignment_persisted()) {
-                case eol_table::Align::Left:
-                    EolSettings->persist_table_alignment(eol_table::Align::Center);
-                    return;
-                case eol_table::Align::Center:
-                    EolSettings->persist_table_alignment(eol_table::Align::Right);
-                    return;
-                case eol_table::Align::Right:
-                    EolSettings->persist_table_alignment(eol_table::Align::Left);
-                    return;
-                }
-            });
+        static constexpr std::array TABLE_ALIGNMENT{
+            std::pair{eol_table::Align::Left, "Left"},
+            std::pair{eol_table::Align::Center, "Center"},
+            std::pair{eol_table::Align::Right, "Right"},
+        };
+        ENUM_OPTION("Table Alignment:", table_alignment, TABLE_ALIGNMENT);
 
         choice = nav.navigate();
 

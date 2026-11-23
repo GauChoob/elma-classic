@@ -1,10 +1,30 @@
 #ifndef UTIL_UTIL_H
 #define UTIL_UTIL_H
 
-#include <fstream>
+#include <cstdio>
 #include <optional>
 
+constexpr int MAX_FILENAME_LEN = 8;
+constexpr int MAX_FILENAME_EXT_LEN = 15; // binary formats allow up to 15 chars
+constexpr int MAX_FILE_PATH_LEN = 4 + MAX_FILENAME_EXT_LEN + 4; // "lgr/" + name + ".lgr" = 23
+
+constexpr int MAX_REPLAY_NAME_LEN = 15;
+constexpr int MAX_REPLAY_EXT_LEN = MAX_REPLAY_NAME_LEN + 4; // "replayname.rec" = 19
+constexpr int MAX_REPLAY_PATH_LEN = 4 + MAX_REPLAY_EXT_LEN; // "rec/replayname.rec" = 23
+
+using finame = char[MAX_FILENAME_EXT_LEN + 1];
+using filepath = char[MAX_FILE_PATH_LEN + 1];
+using recname = char[MAX_REPLAY_EXT_LEN + 1];
+using recpath = char[MAX_REPLAY_PATH_LEN + 1];
+
 constexpr double PI = 3.141592;
+
+namespace util::math {
+
+// fmod with the result wrapped into [0, mod).
+double positive_fmod(double val, double mod);
+
+} // namespace util::math
 
 namespace util::random {
 

@@ -1,5 +1,5 @@
-#ifndef REPLAY_CACHE_H
-#define REPLAY_CACHE_H
+#ifndef MENU_REPLAY_CACHE_H
+#define MENU_REPLAY_CACHE_H
 
 #include <atomic>
 #include <mutex>
@@ -29,6 +29,7 @@ class replay_cache {
   public:
     ~replay_cache();
 
+    void scan_recs();
     // Start background scan of rec/ directory
     void start();
 

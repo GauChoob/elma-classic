@@ -1,5 +1,5 @@
-#ifndef PIC8_H
-#define PIC8_H
+#ifndef PIC_PIC8_H
+#define PIC_PIC8_H
 
 #include <cstdio>
 
@@ -13,9 +13,10 @@ class pic8 {
 
     void allocate(int w, int h);
     void spr_open(const char* filename, FILE* h);
-    bool spr_save(const char* filename, FILE* h);
+    void spr_save(const char* filename, FILE* h);
     void pcx_open(const char* filename, FILE* h = nullptr);
-    bool pcx_save(const char* filename, unsigned char* pal);
+    void pcx_save(const char* filename, const unsigned char* pal);
+    void bmp_save(const char* filename, const unsigned char* pal);
 
     int width;
     int height;
@@ -34,7 +35,7 @@ class pic8 {
     pic8* clone();
     ~pic8();
     void vertical_flip();
-    bool save(const char* filename, unsigned char* pal = nullptr, FILE* h = nullptr);
+    void save(const char* filename, const unsigned char* pal = nullptr, FILE* h = nullptr);
     void ppixel(int x, int y, unsigned char index);
     unsigned char gpixel(int x, int y) const;
     int get_width() const { return width; }
@@ -49,6 +50,7 @@ class pic8 {
     void fill_box(int x1, int y1, int x2, int y2, unsigned char index);
     void fill_box(unsigned char index);
     void line(int x1, int y1, int x2, int y2, unsigned char index);
+    void line(double x1, double y1, double x2, double y2, unsigned char index);
     void subview(int w, int h, unsigned char* source, int pitch, bool inverted);
     void subview(int x1, int y1, int x2, int y2, pic8* source);
 

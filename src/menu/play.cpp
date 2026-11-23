@@ -7,6 +7,7 @@
 #include "level/level.h"
 #include "main.h"
 #include "menu/best_times.h"
+#include "menu/dialog.h"
 #include "menu/external.h"
 #include "menu/nav.h"
 #include "menu/pic.h"
@@ -16,18 +17,28 @@
 #include "physics/init.h"
 #include "pic/abc8.h"
 #include "platform/implementation.h"
-#include "platform/scancode.h"
-#include "platform/text_input.h"
 #include "renderer/timer.h"
 #include "util/util.h"
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <format>
 #include <optional>
 
-// Prompt for replay filename and return true if enter, false if esc
-static bool menu_prompt_replay_name(int internal_index, const char* external_filename,
-                                    char* filename) {
+static bool menu_overwrite(const std::string& filename) {
+    menu_nav nav(filename + " already exists!");
+    nav.y_entries = 200;
+    nav.dy = 40;
+    nav.y_title = 100;
+
+    nav.add_row("Overwrite " + filename);
+    nav.add_row("Cancel");
+    return nav.navigate() == 0;
+}
+
+static void menu_save_play(int internal_index, const char* external_filename, int level_id,
+                           int time) {
+    // Get level name
     std::string level_name;
     if (external_filename) {
         level_name = external_filename;
@@ -36,63 +47,37 @@ static bool menu_prompt_replay_name(int internal_index, const char* external_fil
             std::format("{}: {}", internal_index + 1, get_internal_level_name(internal_index));
     }
 
-    menu_pic menu;
-    int i = 0;
-    empty_keypress_buffer();
-    bool rerender = true;
-    filename[0] = 0;
-    while (true) {
-        handle_events();
-        if (was_key_just_pressed(DIK_ESCAPE)) {
-            return false;
-        }
-        if (was_key_just_pressed(DIK_RETURN)) {
-            if (i > 0) {
-                return true;
-            }
-        }
-        if (was_key_down(DIK_BACK)) {
-            if (i > 0) {
-                i--;
-                filename[i] = 0;
-                rerender = true;
-            }
-        }
-        while (has_text_input()) {
-            char c = pop_text_input();
-            if (MenuFont->has_char(c) && util::text::is_filename_char(c)) {
-                if (i >= MAX_REPLAY_NAME_LEN) {
-                    continue;
-                }
-                filename[i] = c;
-                filename[i + 1] = 0;
-                i++;
-                rerender = true;
-            }
-        }
-        if (rerender) {
-            rerender = false;
-            menu.clear();
-
-            menu.add_line_centered(level_name, 320, 120);
-            menu.add_line_centered("Please enter the filename:", 320, 180);
-
-            filename[i] = '_';
-            filename[i + 1] = 0;
-            menu.add_line_centered(filename, 320, 240);
-            filename[i] = 0;
-        }
-        menu.render();
+    // Add level time
+    if (time > 0) {
+        char time_text[64];
+        util::text::centiseconds_to_string(time, time_text, true, true);
+        level_name = std::format("{} ({})", level_name, (const char*)time_text);
     }
-}
 
-static void menu_save_play(int internal_index, const char* external_filename, int level_id) {
-    recname tmp = "";
-    if (!menu_prompt_replay_name(internal_index, external_filename, tmp)) {
+    // Prompt for filename
+    std::string prompt = std::format("{}\nPlease enter the filename:", level_name);
+    std::string input = "";
+    while (true) {
+        std::optional<std::string> filename =
+            menu_prompt_filename(prompt, input, MAX_REPLAY_NAME_LEN);
+        if (!filename) {
+            return;
+        }
+
+        // Confirm overwrite if file already exists
+        input = *filename;
+        std::string path = input + ".rec";
+        std::string full_path = "rec/" + path;
+        if (std::filesystem::exists(full_path)) {
+            if (!menu_overwrite(path)) {
+                continue;
+            }
+        }
+
+        // Save file
+        recorder::save_rec_file(path.c_str(), level_id);
         return;
     }
-    strcat(tmp, ".rec");
-    recorder::save_rec_file(tmp, level_id);
 }
 
 void update_top_ten(int time, char* time_message, int internal_index,
@@ -150,6 +135,12 @@ void update_top_ten(int time, char* time_message, int internal_index,
 
     // Not in top ten?
     if (tten->times_count == MAX_TIMES && tten->times[MAX_TIMES - 1] < time) {
+        return;
+    }
+
+    if (external_level && Level->file_has_changed(external_filename)) {
+        menu_dialog("The level file has changed", "after it was loaded!",
+                    "The time was not saved.");
         return;
     }
 
@@ -250,7 +241,7 @@ void replay_from_file(const char* filename) {
 
 static text_line ExtraTimeText[14];
 
-MenuLevel menu_level(int internal_index, bool nav_on_play_next, const char* time_message,
+MenuLevel menu_level(int internal_index, bool nav_on_play_next, int time, const char* time_message,
                      const char* external_filename) {
     bool external_level = external_filename != nullptr;
 
@@ -384,8 +375,8 @@ MenuLevel menu_level(int internal_index, bool nav_on_play_next, const char* time
             });
 
         nav.add_row(
-            "Save play", NAV_FUNC(&internal_index, &external_filename) {
-                menu_save_play(internal_index, external_filename, Level->level_id);
+            "Save play", NAV_FUNC(&internal_index, &external_filename, &time) {
+                menu_save_play(internal_index, external_filename, Level->level_id, time);
             });
 
         nav.add_row(
@@ -443,12 +434,13 @@ void loading_screen() {
     menu.render(true);
 }
 
-static void play_internal(int internal_index, bool map_viewer) {
+static void play_internal(int internal_index) {
     player* cur_player = State->get_player(State->player1);
     while (true) {
         finame filename;
         sprintf(filename, "QWQUU%03d.LEV", internal_index + 1);
 
+        bool map_viewer = configure_game();
         loading_screen();
 
         load_level_play(filename);
@@ -479,7 +471,8 @@ static void play_internal(int internal_index, bool map_viewer) {
             State->save();
         }
 
-        MenuLevel choice = menu_level(internal_index, unlocked_new_level, time_message, nullptr);
+        MenuLevel choice =
+            menu_level(internal_index, unlocked_new_level, time, time_message, nullptr);
         Rec1->erase(filename);
         Rec2->erase(filename);
 
@@ -488,11 +481,9 @@ static void play_internal(int internal_index, bool map_viewer) {
             return;
         }
         if (choice == MenuLevel::PlayAgain) {
-            map_viewer = is_key_down(DIK_F1);
             continue;
         }
         if (choice == MenuLevel::PlayNext) {
-            map_viewer = is_key_down(DIK_F1);
             internal_index++;
             cur_player->selected_level = internal_index;
         }
@@ -556,7 +547,7 @@ void menu_play() {
                             player1->skipped[i] && !EolSettings->all_internals_accessible()
                                 ? "SKIPPED!"
                                 : get_internal_level_name(i));
-            nav.add_row(level_name, NAV_FUNC() { play_internal(choice - 1, is_key_down(DIK_F1)); });
+            nav.add_row(level_name, NAV_FUNC() { play_internal(choice - 1); });
         }
 
         int choice = nav.navigate();

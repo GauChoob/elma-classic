@@ -13,8 +13,11 @@
 #include "platform/scancode.h"
 #include "platform/text_input.h"
 #include "platform/utils.h"
+#include "renderer/canvas.h"
+#include "renderer/render.h"
 #include "util/util.h"
 #include <charconv>
+#include <cstring>
 #include <format>
 #include <optional>
 #include <ranges>
@@ -61,6 +64,20 @@ static std::optional<int> parse_int(std::string_view text) {
     if (ec != std::errc() || ptr != text.data() + text.size()) {
         return std::nullopt;
     }
+    return value;
+}
+
+static std::optional<double> parse_double(std::string_view text) {
+    // strtod() requires a null-terminated string.
+    std::string input{text};
+
+    char* end = nullptr;
+    errno = 0;
+    const double value = std::strtod(input.c_str(), &end);
+    if (errno == ERANGE || end != input.c_str() + input.size()) {
+        return std::nullopt;
+    }
+
     return value;
 }
 
@@ -159,6 +176,32 @@ void console::register_console_commands() {
     REGISTER_SETTINGS_BOOL(show_last_apple_time);
     REGISTER_SETTINGS_BOOL(show_gravity_arrows);
 
+    register_command("hq", [this](std::string_view text) {
+        if (text.empty()) {
+            State->high_quality = !State->high_quality;
+        } else if (auto val = parse_bool(text)) {
+            State->high_quality = (int)(*val);
+        } else {
+            add_line(std::format("invalid value: {}", text), LineType::System);
+            return;
+        }
+        canvas::invalidate_canvases();
+        StatusMessages->add(std::format("Video Detail: {}", State->high_quality ? "High" : "Low"));
+    });
+
+    register_command("zoom", [this](std::string_view text) {
+        if (!text.empty()) {
+            auto zoom = parse_double(text);
+            if (zoom) {
+                EolSettings->set_zoom(*zoom);
+            } else {
+                add_line(std::format("invalid value: {}", text), LineType::System);
+                return;
+            }
+        }
+        StatusMessages->add(std::format("Zoom: {:.2f}", EolSettings->zoom()));
+    });
+
     REGISTER_SETTINGS_BOOL(default_ground);
     register_alias("defground", "default_ground");
     REGISTER_SETTINGS_BOOL(default_sky);
@@ -166,6 +209,7 @@ void console::register_console_commands() {
     REGISTER_SETTINGS_BOOL(still_objects);
 
     REGISTER_SETTINGS_INT(chat_lines);
+    REGISTER_SETTINGS_BOOL(large_font);
 
     REGISTER_SETTINGS_BOOL(show_fps);
 
@@ -236,6 +280,30 @@ void console::register_console_commands() {
     REGISTER_SETTINGS_BOOL(show_speedometer);
     register_alias("speedometer", "show_speedometer");
     register_alias("speed", "show_speedometer");
+
+    // Handled server-side, forward as chat
+    auto register_server_command = [this](std::string_view name) {
+        register_command(name, [name = std::string(name)](std::string_view args) {
+            EolClient->send_chat(args.empty() ? std::format("!{}", name)
+                                              : std::format("!{} {}", name, args));
+        });
+    };
+    register_server_command("abort");
+    register_server_command("stop");
+
+    register_command("snapshot", [](std::string_view arg) {
+        std::string name = "screenshots/";
+        std::filesystem::create_directory("screenshots");
+        if (arg.empty()) {
+            std::string_view level_filename{current_level_filename()};
+            level_filename.remove_suffix(strlen(".lev"));
+            name.append(level_filename);
+        } else {
+            name.append(arg);
+        }
+        name.append(".bmp");
+        level_to_bmp(name.c_str());
+    });
 }
 
 void console::add_line(std::string text, LineType type) {

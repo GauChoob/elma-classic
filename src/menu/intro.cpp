@@ -1,22 +1,16 @@
 #include "menu/intro.h"
-#include "editor/editor.h"
 #include "eol/settings.h"
-#include "game/qopen.h"
 #include "game/recorder.h"
 #include "game/state.h"
 #include "main.h"
-#include "menu/ball_collision.h"
 #include "menu/main.h"
 #include "menu/pic.h"
 #include "menu/player.h"
-#include "menu/rec_list.h"
-#include "physics/init.h"
-#include "pic/abc8.h"
 #include "pic/pic8.h"
 #include "pic/surface.h"
 #include "platform/implementation.h"
 #include "platform/scancode.h"
-#include "renderer/render.h"
+#include "systems_init.h"
 
 static void show_intro_screen() {
     pic8* intro_screen = lock_backbuffer_pic(false);
@@ -27,23 +21,7 @@ static void show_intro_screen() {
 }
 
 void menu_intro() {
-    init_qopen();
-
-    init_menu_pictures();
-
-    State = new state;
-    if (!State) {
-        external_error("memory");
-    }
-
-    merge_states();
-    eol_settings::sync_controls_to_state(State);
-
-    init_physics_data();
-
-    rec_list::build_cache();
-
-    // test_player();
+    systems_init::init_pre_intro();
 
     // Load intro.pcx and hide the version
     if (!EolSettings->skip_intro()) {
@@ -58,21 +36,7 @@ void menu_intro() {
         show_intro_screen();
     }
 
-    init_sound();
-
-    // Load globals
-    EditorWhiteFont = new abc8("kisbetu1.abc", 1, 19); // "small letter 1"
-    EditorBlackFont = new abc8("kisbetu2.abc", 1, 19); // "small letter 2"
-
-    init_renderer();
-
-    Rec1 = new recorder;
-    Rec2 = new recorder;
-
-    create_editor_palette();
-
-    // Initialize stopwatch, just in case
-    stopwatch_reset();
+    systems_init::init_post_intro();
 
     // Await for key input before scrolling intro.pcx
     if (!EolSettings->skip_intro()) {
@@ -86,13 +50,13 @@ void menu_intro() {
     }
 
     if (State->player_count == 0) {
-        if (!menu_player_create(true)) {
-            menu_exit();
+        while (!menu_player_create(true)) {
+            menu_prompt_exit();
         }
     } else {
         if (!EolSettings->skip_intro()) {
-            if (!menu_player_choose(true, false)) {
-                menu_exit();
+            while (!menu_player_choose(true, false)) {
+                menu_prompt_exit();
             }
         }
     }
@@ -100,14 +64,4 @@ void menu_intro() {
     menu_main();
 
     internal_error("menu_intro!");
-}
-
-void menu_exit() {
-    WallsDisabled = true;
-    menu_pic* menu = new menu_pic;
-    menu->add_line_centered("Thank you for registering the game!", 320, 220);
-    menu->add_line_centered("Please do not distribute!", 320, 300);
-
-    menu->loop();
-    quit();
 }

@@ -1,14 +1,14 @@
-#ifndef SCANCODE_H
-#define SCANCODE_H
+#ifndef PLATFORM_SCANCODE_H
+#define PLATFORM_SCANCODE_H
 
 #include <array>
-#include <directinput/scancodes.h>
 #include <string>
+#include <vendor/directinput/scancodes.h>
 
 constexpr int MaxKeycode = 256;
 
 // DIK_ Windows scancode
-typedef int DikScancode;
+using DikScancode = int;
 static_assert(sizeof(DikScancode) <= 4);
 
 constexpr std::array<DikScancode, 8> MODIFIERS{DIK_LSHIFT, DIK_RSHIFT, DIK_LCONTROL, DIK_RCONTROL,
